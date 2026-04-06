@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-gateway-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 200
+        spike_limit_mib: 50
+
+    exporters:
+      elasticsearch:
+        endpoints:
+          - https://elasticsearch-es-http.observability.svc.cluster.local:9200
+        user: elastic
+        password: ${env:ES_PASSWORD}
+        tls:
+          insecure_skip_verify: true
+        flush:
+          interval: 5s
+          bytes: 5242880
+        retry:
+          enabled: true
+          max_requests: 3
+
+    service:
+      telemetry:
+        logs:
+          level: warn
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]

@@ -1,0 +1,55 @@
+# manifests/runner-debug.yaml
+# Temporary debug pod for investigating runner networking.
+# Runs in the gitea namespace alongside the runner.
+# Delete when done: kubectl delete -f /work/runner-debug.yaml
+#
+# Usage:
+#   kubectl apply -f /work/runner-debug.yaml
+#   kubectl exec -it -n gitea runner-debug -- bash
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: runner-debug
+  namespace: gitea
+  labels:
+    app: runner-debug
+spec:
+  restartPolicy: Never
+  containers:
+    - name: debug
+      image: gitea/runner-images:ubuntu-latest
+      command: ["sleep", "3600"]
+      env:
+        - name: DOCKER_HOST
+          value: "tcp://localhost:2375"
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+
+    - name: dind
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+      volumeMounts:
+        - name: docker-storage
+          mountPath: /var/lib/docker
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "200m"
+        limits:
+          memory: "2Gi"
+          cpu: "2000m"
+
+  volumes:
+    - name: docker-storage
+      emptyDir: {}

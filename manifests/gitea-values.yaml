@@ -1,0 +1,99 @@
+# manifests/gitea-values.yaml
+# Gitea Helm chart values for the PoC environment.
+# Chart: gitea-charts/gitea
+# Hostname: gitea.test — TLS via Vault-issued cert, routed through Traefik.
+# Built-in container registry enabled — replaces the standalone registry.test:5000 plan.
+# Actions runner is deployed separately after Gitea is healthy (see gitea-init.sh).
+
+global:
+  imageRegistry: ""
+
+gitea:
+  admin:
+    username: poc-admin
+    # Password injected via secret — see phase-4a-runbook.md Step X
+    existingSecret: gitea-admin-secret
+    email: "poc-admin@gitea.test"
+
+  config:
+    server:
+      DOMAIN: gitea.test
+      ROOT_URL: "https://gitea.test"
+      HTTP_PORT: 3000
+      # Disable SSH — not needed for PoC, simplifies networking
+      DISABLE_SSH: true
+      START_SSH_SERVER: false
+
+    service:
+      DISABLE_REGISTRATION: false
+      REQUIRE_SIGNIN_VIEW: false
+
+    # Enable the built-in container registry (OCI-compliant)
+    packages:
+      ENABLED: true
+
+    actions:
+      ENABLED: true
+      DEFAULT_ACTIONS_URL: "https://gitea.test"
+
+    log:
+      LEVEL: Info
+
+  # Mount admin secret
+  additionalConfigFromEnvs:
+    - name: GITEA__security__SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: gitea-admin-secret
+          key: secretKey
+
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+  ssh:
+    type: ClusterIP
+    port: 22
+
+# Ingress disabled — using Traefik IngressRoute CRD instead (consistent with
+# the rest of the stack — standard Ingress is unreliable with Traefik v3)
+ingress:
+  enabled: false
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ""
+
+# Single replica for PoC
+replicaCount: 1
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+# PostgreSQL — lightweight single instance for PoC
+postgresql-ha:
+  enabled: false
+
+postgresql:
+  enabled: true
+  global:
+    postgresql:
+      auth:
+        password: "gitea-pg-pass"
+        database: "gitea"
+        username: "gitea"
+  primary:
+    persistence:
+      size: 2Gi
+
+redis-cluster:
+  enabled: false
+
+redis:
+  enabled: false

@@ -1,0 +1,26 @@
+# k3d-registries.yaml
+# Place at: ~/Projects/poc/k3d-registries.yaml
+# Passed to k3d cluster create via --registry-config (wired in cluster-create.sh).
+#
+# Tells containerd on every k3d node to trust gitea.test as a container registry.
+# Gitea's built-in OCI registry is served on port 443 through Traefik.
+# The Vault CA cert is volume-mounted into every node at cluster creation —
+# containerd uses the system CA bundle which includes it.
+#
+# Changed from Phase 3: replaced registry.test:5000 (standalone registry, removed)
+# with gitea.test (Gitea built-in registry, served via Traefik on 443).
+# cluster-create.sh also removes the old --port "5000:30500@loadbalancer" mapping.
+
+mirrors:
+  "gitea.test":
+    endpoint:
+      - "https://gitea.test"
+
+configs:
+  "gitea.test":
+    tls:
+      insecure_skip_verify: false
+      # containerd uses the node's system CA bundle.
+      # The Vault CA cert is volume-mounted into every node at cluster creation:
+      #   --volume "${CA_CERT}:/etc/ssl/certs/poc-ca.crt@all"
+      # No additional config needed here — CA is already trusted.

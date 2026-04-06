@@ -1,0 +1,73 @@
+# vault-server-values.yaml
+# Vault Helm values — server mode with file storage
+#
+# Unseal is handled explicitly by:
+#   - vault-bootstrap.sh (first run, after operator init)
+#   - poc-start (every subsequent session restart)
+#
+# The unseal key is stored in vault-unseal-secret for safe keeping
+# and is read by those scripts via port-forward. No in-pod automation.
+#
+# Install:
+#   helm upgrade --install vault hashicorp/vault \
+#     --namespace vault --create-namespace \
+#     --values /work/vault-server-values.yaml
+
+global:
+  enabled: true
+
+injector:
+  enabled: true
+  replicas: 1
+
+server:
+  image:
+    tag: "1.21.2"
+
+  dev:
+    enabled: false
+
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable     = 1
+        address         = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+
+      storage "file" {
+        path = "/vault/data"
+      }
+
+      api_addr     = "http://vault.vault.svc.cluster.local:8200"
+      cluster_addr = "http://vault.vault.svc.cluster.local:8201"
+
+  dataStorage:
+    enabled: true
+    size: 1Gi
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+
+  serviceAccount:
+    create: true
+    name: vault
+
+  readinessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+
+  # Liveness probe — must tolerate sealed AND uninitialized
+  # otherwise Vault is killed before operator init or unseal can run.
+  # sealedcode=204 + uninitcode=204 → both return 204 (pass)
+  livenessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+    initialDelaySeconds: 60
+    failureThreshold: 10
+
+ui:
+  enabled: true
+  serviceType: ClusterIP

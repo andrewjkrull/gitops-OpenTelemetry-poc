@@ -1,0 +1,60 @@
+# manifests/argocd-values.yaml
+# ArgoCD Helm chart values for the PoC environment.
+# Chart: argo/argo-cd
+# Hostname: argocd.test — TLS via Vault-issued cert, routed through Traefik.
+#
+# ArgoCD runs with TLS disabled on its own server — Traefik terminates TLS
+# and proxies plain HTTP to ArgoCD. This is the standard pattern for
+# putting ArgoCD behind a reverse proxy.
+
+global:
+  domain: argocd.test
+
+server:
+  # Disable ArgoCD's own TLS — Traefik terminates it
+  extraArgs:
+    - --insecure
+
+  # Service is ClusterIP — exposed via Traefik IngressRoute
+  service:
+    type: ClusterIP
+
+  ingress:
+    enabled: false
+
+configs:
+  params:
+    # Required when running behind a reverse proxy — tells ArgoCD its external URL
+    server.insecure: true
+
+  cm:
+    # Allow ArgoCD to connect to Gitea using the internal cluster DNS name
+    # This is set here so it applies from first boot — can also be set via UI
+    application.instanceLabelKey: argocd.argoproj.io/app-name
+
+  # Repository credentials template — populated by gitea-init.sh after Gitea is live
+  # Defined here as a placeholder; gitea-init.sh patches it via argocd CLI
+  repositories: {}
+
+replicaCount: 1
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+# Disable components not needed for PoC
+notifications:
+  enabled: false
+
+applicationSet:
+  enabled: false
+
+dex:
+  enabled: false
+
+redis:
+  enabled: true

@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-daemonset
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-daemonset
+rules:
+- apiGroups: [""]
+  resources:
+    - nodes
+    - nodes/proxy
+    - nodes/stats
+    - namespaces
+    - pods
+    - endpoints
+    - services
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-daemonset
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-daemonset
+subjects:
+- kind: ServiceAccount
+  name: otel-collector-daemonset
+  namespace: observability
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector-daemonset
+  namespace: observability
+  labels:
+    app: otel-collector-daemonset
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector-daemonset
+  template:
+    metadata:
+      labels:
+        app: otel-collector-daemonset
+    spec:
+      serviceAccountName: otel-collector-daemonset
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.123.0
+        args: ["--config=/conf/config.yaml"]
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: K8S_NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        ports:
+        - containerPort: 4317
+        - containerPort: 4318
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+        - name: varlogpods
+          mountPath: /var/log/pods
+          readOnly: true
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 50m
+          limits:
+            memory: 128Mi
+            cpu: 200m
+      volumes:
+      - name: config
+        configMap:
+          name: otel-collector-daemonset-config
+      - name: varlogpods
+        hostPath:
+          path: /var/log/pods
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-daemonset
+  namespace: observability
+spec:
+  selector:
+    app: otel-collector-daemonset
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318

@@ -1,0 +1,32 @@
+# manifests/argocd-ingressroute.yaml
+# Traefik IngressRoute for argocd.test.
+# ArgoCD server runs with --insecure (plain HTTP on port 8080).
+# Traefik terminates TLS and proxies to the ArgoCD server service.
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: argocd-transport
+  namespace: argocd
+spec:
+  insecureSkipVerify: false
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`argocd.test`)
+      kind: Rule
+      services:
+        - name: argocd-server
+          port: 80
+          serversTransport: argocd-transport
+  tls:
+    secretName: argocd-tls

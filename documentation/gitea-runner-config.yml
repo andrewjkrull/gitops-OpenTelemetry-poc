@@ -1,0 +1,50 @@
+log:
+  level: info
+
+runner:
+  file: .runner
+  capacity: 1
+  envs:
+    GIT_SSL_CAINFO: /usr/local/share/ca-certificates/poc-ca.crt
+    NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/poc-ca.crt
+    SSL_CERT_FILE: /usr/local/share/ca-certificates/poc-ca.crt
+  env_file: .env
+  timeout: 3h
+  shutdown_timeout: 0s
+  insecure: false
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  github_mirror: ''
+  labels:
+    - "ubuntu-latest:docker://gitea/runner-images:ubuntu-latest"
+    - "ubuntu-24.04:docker://gitea/runner-images:ubuntu-latest"
+    - "ubuntu-22.04:docker://gitea/runner-images:ubuntu-latest"
+
+cache:
+  enabled: true
+  dir: ""
+  host: ""
+  port: 0
+  external_server: ""
+
+container:
+  network: "host"
+  privileged: false
+  options: >-
+    -v /etc/hosts:/etc/hosts:ro
+    -v /home/andrew/Projects/poc/vault/poc-ca.crt:/usr/local/share/ca-certificates/poc-ca.crt:ro
+    -e SSL_CERT_DIR=/usr/local/share/ca-certificates
+    -e GIT_SSL_CAINFO=/usr/local/share/ca-certificates/poc-ca.crt
+    -e NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/poc-ca.crt
+    -e SSL_CERT_FILE=/usr/local/share/ca-certificates/poc-ca.crt
+  workdir_parent:
+  valid_volumes:
+    - '**'
+  docker_host: ""
+  force_pull: false
+  force_rebuild: false
+  require_docker: false
+  docker_timeout: 0s
+
+host:
+  workdir_parent:

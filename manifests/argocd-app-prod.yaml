@@ -1,0 +1,26 @@
+# manifests/argocd-app-prod.yaml
+# ArgoCD Application for the prod environment.
+# Manual sync — changes must be explicitly approved and synced in ArgoCD UI.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sensor-demo-prod
+  namespace: argocd
+  labels:
+    environment: prod
+spec:
+  project: default
+
+  source:
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/poc/sensor-demo-deploy
+    targetRevision: main
+    path: envs/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sensor-prod
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false

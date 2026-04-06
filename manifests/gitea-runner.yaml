@@ -1,0 +1,138 @@
+# manifests/gitea-runner.yaml
+# Gitea Actions runner — deployed in the gitea namespace.
+# Registered at org level so it serves all repos in the poc org.
+# Consumes the gitea-runner-token secret created by gitea-init.sh.
+#
+# Uses Docker-in-Docker (DinD) to provide a Docker daemon for the runner.
+# The runner spawns job containers via DinD on tcp://localhost:2375.
+# Image builds use Kaniko — no docker build/push commands in workflows.
+#
+# Runner config is mounted to /data/config.yaml — the default path the
+# act_runner checks on startup, avoiding CONFIG_FILE env var issues.
+#
+# The runner connects to Gitea via internal cluster DNS.
+# gitea.test is only for browser access — never used inside the cluster.
+#
+# Apply AFTER gitea-init.sh has run (token secret must exist).
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-config
+  namespace: gitea
+data:
+  config.yaml: |
+    runner:
+      labels:
+        - "ubuntu-latest:docker://gitea/runner-images:ubuntu-latest"
+        - "ubuntu-24.04:docker://gitea/runner-images:ubuntu-latest"
+        - "ubuntu-22.04:docker://gitea/runner-images:ubuntu-latest"
+    container:
+      # Use the DinD bridge network — provides internet access to job containers
+      # The per-job network created by act_runner has no internet route
+      network: "bridge"
+      options: >-
+        -v /etc/ssl/certs/poc-ca.crt:/usr/local/share/ca-certificates/poc-ca.crt:ro
+        -e SSL_CERT_DIR=/usr/local/share/ca-certificates
+        -e GIT_SSL_CAINFO=/usr/local/share/ca-certificates/poc-ca.crt
+        -e NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/poc-ca.crt
+        -e SSL_CERT_FILE=/usr/local/share/ca-certificates/poc-ca.crt
+      valid_volumes:
+        - '**'
+      force_pull: false
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner
+  namespace: gitea
+  labels:
+    app: gitea-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-runner
+  template:
+    metadata:
+      labels:
+        app: gitea-runner
+    spec:
+      restartPolicy: Always
+
+      volumes:
+        - name: docker-storage
+          emptyDir: {}
+        - name: runner-data
+          emptyDir: {}
+        - name: runner-config
+          configMap:
+            name: gitea-runner-config
+        - name: poc-ca
+          hostPath:
+            path: /etc/ssl/certs/poc-ca.crt
+            type: File
+
+      containers:
+
+        # ── Docker-in-Docker daemon ──────────────────────────────────────────
+        - name: dind
+          image: docker:27-dind
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          volumeMounts:
+            - name: docker-storage
+              mountPath: /var/lib/docker
+            - name: poc-ca
+              mountPath: /usr/local/share/ca-certificates/poc-ca.crt
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+
+        # ── Gitea Actions runner ─────────────────────────────────────────────
+        - name: runner
+          image: gitea/act_runner:latest
+          env:
+            - name: GITEA_INSTANCE_URL
+              value: "http://gitea-http.gitea.svc.cluster.local:3000"
+
+            - name: GITEA_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-runner-token
+                  key: token
+
+            - name: GITEA_RUNNER_NAME
+              value: "poc-runner"
+
+            - name: DOCKER_HOST
+              value: "tcp://localhost:2375"
+
+          volumeMounts:
+            - name: runner-data
+              mountPath: /data
+            # Mount config to /data/config.yaml — default path act_runner checks
+            - name: runner-config
+              mountPath: /data/config.yaml
+              subPath: config.yaml
+            - name: poc-ca
+              mountPath: /usr/local/share/ca-certificates/poc-ca.crt
+              readOnly: true
+
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"

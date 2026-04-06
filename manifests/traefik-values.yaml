@@ -1,0 +1,46 @@
+api:
+  dashboard: true
+  insecure: false
+
+ports:
+  web:
+    port: 8000
+    exposedPort: 80
+    expose:
+      default: true
+    protocol: TCP
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    port: 8443
+    exposedPort: 443
+    expose:
+      default: true
+    protocol: TCP
+
+deployment:
+  replicas: 2
+
+rbac:
+  enabled: true
+
+logs:
+  general:
+    level: INFO
+  access:
+    enabled: true
+
+additionalArguments:
+  - "--tracing=true"
+  - "--tracing.otlp=true"
+  - "--tracing.otlp.grpc=true"
+  - "--tracing.otlp.grpc.endpoint=otel-collector-gateway.observability.svc.cluster.local:4317"
+  - "--tracing.otlp.grpc.insecure=true"
+  - "--metrics.otlp=true"
+  - "--metrics.otlp.grpc=true"
+  - "--metrics.otlp.grpc.endpoint=otel-collector-gateway.observability.svc.cluster.local:4317"
+  - "--metrics.otlp.grpc.insecure=true"

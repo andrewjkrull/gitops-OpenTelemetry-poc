@@ -1,0 +1,91 @@
+# .gitea/workflows/build.yml
+# CI workflow for sensor-producer.
+# Triggers on push to main — builds Docker image, pushes to Gitea registry,
+# and commits the new image tag to sensor-demo-deploy for ArgoCD to sync.
+#
+# Secrets required (set at org level):
+#   REGISTRY_USER     — Gitea username (poc-admin)
+#   REGISTRY_PASSWORD — Gitea admin password
+#   CI_DEPLOY_TOKEN   — Gitea API token with write:repository scope
+
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: gitea.test
+  IMAGE: gitea.test/poc/sensor-producer
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      - name: Install CA certificate
+        run: update-ca-certificates
+
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+
+      - name: Login to Gitea registry
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
+            docker login ${{ env.REGISTRY }} \
+              -u ${{ secrets.REGISTRY_USER }} \
+              --password-stdin
+
+      - name: Build image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE }}:${{ steps.tag.outputs.sha }} \
+            -t ${{ env.IMAGE }}:latest \
+            .
+
+      - name: Push image
+        run: |
+          docker push ${{ env.IMAGE }}:${{ steps.tag.outputs.sha }}
+          docker push ${{ env.IMAGE }}:latest
+
+      - name: Update image tag in deploy repo
+        run: |
+          git config --global user.email "ci@gitea.test"
+          git config --global user.name "Gitea CI"
+
+          git clone \
+            https://poc-admin:${{ secrets.CI_DEPLOY_TOKEN }}@gitea.test/poc/sensor-demo-deploy.git \
+            /tmp/deploy-repo
+
+          cd /tmp/deploy-repo/envs/dev
+
+          # Update newName and newTag for this app by matching on the stable
+          # "- name: sensor-producer" line. Works on both first run (newName: busybox)
+          # and subsequent runs (newName: gitea.test/poc/sensor-producer).
+          sed -i "/- name: sensor-producer/{
+            n
+            s|newName:.*|newName: ${{ env.IMAGE }}|
+            n
+            s|newTag:.*|newTag: ${{ steps.tag.outputs.sha }}|
+          }" kustomization.yaml
+
+          cd /tmp/deploy-repo
+          git add envs/dev/kustomization.yaml
+          git diff --staged --quiet && echo "No tag change — skipping commit" && exit 0
+
+          git commit -m "ci: update sensor-producer to ${{ steps.tag.outputs.sha }}
+
+          Built from ${{ github.sha }}
+          Triggered by push to ${{ github.repository }}"
+
+          git push origin main
+
+      - name: Summary
+        run: |
+          echo "image=sensor-producer:${{ steps.tag.outputs.sha }}" >> $GITHUB_OUTPUT || true
+          echo "Built and pushed ${{ env.IMAGE }}:${{ steps.tag.outputs.sha }}"

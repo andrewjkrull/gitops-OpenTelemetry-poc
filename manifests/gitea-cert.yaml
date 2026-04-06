@@ -1,0 +1,18 @@
+# manifests/gitea-cert.yaml
+# TLS certificate for gitea.test — issued by Vault intermediate CA via cert-manager.
+# Apply this BEFORE the IngressRoute — Traefik needs the secret to exist.
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitea-tls
+  namespace: gitea
+spec:
+  secretName: gitea-tls
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+  duration: 72h
+  renewBefore: 24h
+  dnsNames:
+    - gitea.test

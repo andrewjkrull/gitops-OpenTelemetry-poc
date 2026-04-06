@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-daemonset-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      prometheus:
+        config:
+          scrape_configs:
+          - job_name: kubelet
+            scrape_interval: 30s
+            scheme: http
+            static_configs:
+            - targets:
+              - ${env:K8S_NODE_IP}:10255
+            metrics_path: /metrics
+
+          - job_name: kubelet-cadvisor
+            scrape_interval: 30s
+            scheme: http
+            static_configs:
+            - targets:
+              - ${env:K8S_NODE_IP}:10255
+            metrics_path: /metrics/cadvisor
+
+      filelog:
+        include:
+          - /var/log/pods/*/*/*.log
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        operators:
+          - type: router
+            id: get-format
+            routes:
+              - output: parser-docker
+                expr: 'body matches "^\\{"'
+            default: parser-crio
+          - type: json_parser
+            id: parser-docker
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+          - type: regex_parser
+            id: parser-crio
+            regex: '^(?P<time>[^ Z]+) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$'
+            timestamp:
+              parse_from: attributes.time
+              layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+          - type: move
+            from: attributes.log
+            to: body
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 200
+        spike_limit_mib: 50
+      resourcedetection:
+        detectors: [env, system]
+        timeout: 5s
+
+    exporters:
+      otlp/gateway:
+        endpoint: otel-collector-gateway.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      telemetry:
+        logs:
+          level: warn
+      pipelines:
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, resourcedetection, batch]
+          exporters: [otlp/gateway]
+        logs:
+          receivers: [otlp, filelog]
+          processors: [memory_limiter, resourcedetection, batch]
+          exporters: [otlp/gateway]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection, batch]
+          exporters: [otlp/gateway]

@@ -1,0 +1,18 @@
+# manifests/argocd-cert.yaml
+# TLS certificate for argocd.test — issued by Vault intermediate CA via cert-manager.
+# Apply this BEFORE the IngressRoute — Traefik needs the secret to exist.
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-tls
+  namespace: argocd
+spec:
+  secretName: argocd-tls
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+  duration: 72h
+  renewBefore: 24h
+  dnsNames:
+    - argocd.test

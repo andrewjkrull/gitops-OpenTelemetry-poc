@@ -1,0 +1,36 @@
+# manifests/gitea-ingressroute.yaml
+# Traefik IngressRoute for gitea.test.
+# Uses IngressRoute CRD (not standard Ingress) — consistent with Kibana pattern
+# which is the proven approach for Traefik v3 in this stack.
+#
+# ServersTransport configures how Traefik talks to the Gitea backend.
+# Gitea itself serves plain HTTP on port 3000 — Traefik terminates TLS.
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: gitea-transport
+  namespace: gitea
+spec:
+  # Gitea backend is plain HTTP — no backend TLS needed
+  insecureSkipVerify: false
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`gitea.test`)
+      kind: Rule
+      services:
+        - name: gitea-http
+          port: 3000
+          serversTransport: gitea-transport
+  tls:
+    secretName: gitea-tls

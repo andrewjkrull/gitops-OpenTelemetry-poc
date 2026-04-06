@@ -1,0 +1,57 @@
+# manifests/messaging-namespace.yaml
+# Namespaces for Phase 4.
+# messaging — shared infrastructure: Mosquitto, Redis, Kafka
+# sensor-dev, sensor-qa, sensor-prod — per-environment app namespaces
+# gitea — Gitea Git server + container registry
+# argocd — ArgoCD GitOps controller
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: messaging
+  labels:
+    purpose: infrastructure
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sensor-dev
+  labels:
+    purpose: workloads
+    environment: dev
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sensor-qa
+  labels:
+    purpose: workloads
+    environment: qa
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sensor-prod
+  labels:
+    purpose: workloads
+    environment: prod
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea
+  labels:
+    purpose: infrastructure
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    purpose: infrastructure

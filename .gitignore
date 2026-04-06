@@ -1,0 +1,28 @@
+# Runtime directories — contain secrets, kubeconfig, and temp files
+# These are created locally and must never be committed
+tmp/
+kube/
+helm-cache/
+helm-config/
+vault/
+
+# Temporary working directory — scratch space, never committed
+temp/
+
+# Backup files — dated script backups created during editing
+scripts/*.sh-*
+
+# Context files — used for AI-assisted development sessions
+# Kept locally for project history but not shared via repo
+CONTEXT.md
+context-history/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
