@@ -53,14 +53,14 @@ Messaging layer (messaging namespace):
 
 ## Prerequisites
 
-### 1 — WSL2 on Windows (or native Linux)
+### 1 — Linux host (bare metal, VM, or Linux workstation)
 
-Built and tested on **WSL2 with Debian Trixie**. Native Linux works identically.
+Built and tested on a **dedicated Debian Linux host with native Docker Engine**.
 macOS is not tested.
 
-### 2 — Docker Engine (not Docker Desktop)
+### 2 — Docker Engine
 
-Docker Engine must be running natively inside WSL2 — not Docker Desktop.
+Docker Engine must be installed and running natively on the Linux host.
 
 ```bash
 docker info | grep "Server Version"
@@ -90,7 +90,7 @@ docker images devops-toolkit:latest
 The image is built from the `docker-devops` repository. If you don't have it:
 
 ```bash
-git clone <docker-devops-repo-url>
+git clone https://github.com/andrewjkrull/docker-devops.git
 cd docker-devops
 make build
 ```
@@ -119,16 +119,21 @@ sudo tee -a /etc/hosts <<EOF
 EOF
 ```
 
-To access these from a Windows browser, also add them to
-`C:\Windows\System32\drivers\etc\hosts` (run PowerShell as Administrator):
+To access these from a workstation browser, replace `127.0.0.1` with your
+server's IP address and add to your workstation hosts file.
 
+On Windows (PowerShell as Administrator) — replace `<SERVER_IP>`:
+
+```powershell
+Add-Content -Path "C:\Windows\System32\drivers\etc\hosts" -Value `
+  "`n<SERVER_IP> whoami.test`n<SERVER_IP> httpbin.test`n<SERVER_IP> traefik.test`n<SERVER_IP> kibana.test`n<SERVER_IP> gitea.test`n<SERVER_IP> argocd.test"
 ```
-127.0.0.1 whoami.test
-127.0.0.1 httpbin.test
-127.0.0.1 traefik.test
-127.0.0.1 kibana.test
-127.0.0.1 gitea.test
-127.0.0.1 argocd.test
+
+On Linux workstation:
+
+```bash
+echo "<SERVER_IP>  whoami.test httpbin.test traefik.test kibana.test gitea.test argocd.test" \
+  | sudo tee -a /etc/hosts
 ```
 
 ### 6 — Shell environment configuration
@@ -235,7 +240,7 @@ poc/
 │   ├── gitea-values.yaml            <- Gitea Helm values
 │   ├── gitea-cert.yaml              <- TLS cert for gitea.test
 │   ├── gitea-ingressroute.yaml      <- Traefik IngressRoute for gitea.test
-│   ├── gitea-runner.yaml            <- Gitea Actions runner (reference only — not applied)
+│   ├── gitea-runner.yaml            <- Gitea Actions runner (reference only — host container is used instead)
 │   ├── argocd-values.yaml           <- ArgoCD Helm values
 │   ├── argocd-cert.yaml             <- TLS cert for argocd.test
 │   └── argocd-ingressroute.yaml     <- Traefik IngressRoute for argocd.test
@@ -301,7 +306,7 @@ Budget 20–30 minutes for a first build (mostly image pull time).
 
 ---
 
-## Session restart (after WSL2 reboot)
+## Session restart (after server reboot or cluster restart)
 
 ```bash
 k3d cluster start poc
@@ -319,7 +324,7 @@ pf-es
 poc-start
 
 # Optional: Vault UI access in a second terminal
-pf-vault   # then open http://127.0.0.1:8200
+pf-vault   # then open http://<SERVER_IP>:8200
 ```
 
 ---
@@ -328,8 +333,8 @@ pf-vault   # then open http://127.0.0.1:8200
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Vault UI | http://127.0.0.1:8200 | Requires `pf-vault`. Token: `cat ${POC_DIR}/vault/root-token` |
-| Elasticsearch | https://127.0.0.1:9200 | Requires `pf-es` |
+| Vault UI | http://<SERVER_IP>:8200 | Requires `pf-vault`. Token: `cat ${POC_DIR}/vault/root-token` |
+| Elasticsearch | https://<SERVER_IP>:9200 | Requires `pf-es` |
 | Kibana | https://kibana.test | Password: `es-pass` or Vault UI → secret/observability/elasticsearch |
 | Traefik dashboard | https://traefik.test/dashboard/ | |
 | Gitea | https://gitea.test | Login: `poc-admin` / `gitea-token` |
@@ -353,7 +358,7 @@ Vault is not routed through Traefik — accessible via port-forward only.
 | Gitea as Git server + container registry | Single tool replaces both GitHub and a standalone registry |
 | ArgoCD for GitOps | One Application per environment — dev auto-syncs, qa/prod manual |
 | Kustomize overlays | base + dev/qa/prod — same manifests, different configs per environment |
-| Gitea Actions runner on WSL2 host | k3d nodes don't expose Docker socket — runner must run on the host |
+| Gitea Actions runner on Linux host | k3d nodes are Docker containers — DinD networking breaks internet access for job containers. Host container with `network: host` solves this cleanly |
 | W3C traceparent in message envelopes | Standard context propagation across MQTT and Kafka without HTTP |
 | k3d over minikube | Multi-node cluster tests real scheduling and Secret access patterns |
 | Traefik over Envoy Gateway | Simpler ops model while learning the org's platform patterns |
@@ -374,7 +379,7 @@ Vault is not routed through Traefik — accessible via port-forward only.
 - **k3d kubelet port 10250 returns 401** — OTel uses port 10255 (read-only, no auth)
 - **ES password from Vault CLI adds ANSI codes** — use `es-pass` function or `kubectl get secret` directly
 - **Vault CLI token helper conflicts with `/root/.vault` mount** — scripts must not mount the vault dir and must pass `VAULT_TOKEN` explicitly
-- **Gitea Actions runner runs on WSL2 host, not in k3d** — k3d nodes do not expose the Docker socket; runner is managed via `runner-start` / `runner-stop`
+- **Gitea Actions runner runs on the Linux host, not in k3d** — in-cluster DinD was attempted and abandoned (k3d networking breaks internet access for job containers); runner is managed via `runner-start` / `runner-stop`
 - **MQTT and Kafka don't carry HTTP headers** — trace context is carried in the message JSON envelope (`traceParent` field)
 - **messaging-init.sh must run before messaging.yaml** — creates the Kubernetes Secrets that the workloads reference
 
