@@ -98,12 +98,15 @@ This demonstrates the GitOps principle: the change travels through git → ArgoC
 → ConfigMap update → pod picks up the new env var value — with zero code
 deployment or container restart required.
 
-> **Why no container restart?** The app reads `BRIDGE_DELAY_MS` from
-> `IConfiguration` at startup. When a ConfigMap-sourced env var changes,
-> Kubernetes does not restart the pod automatically — ArgoCD patches the
-> Deployment's `envFrom` reference, which triggers a rolling restart. The
-> new pod starts with the updated ConfigMap values. This is standard
-> Kubernetes behaviour for `envFrom: configMapRef`.
+> **Why does the pod restart?** Kubernetes does not automatically restart pods
+> when a referenced ConfigMap changes — `envFrom: configMapRef` is evaluated
+> at pod startup only. Reloader (Stakater) watches for ConfigMap changes and
+> triggers a rolling restart of any Deployment annotated with
+> `reloader.stakater.com/auto: "true"`. All three app Deployments carry this
+> annotation. When ArgoCD syncs the updated ConfigMap, Reloader detects the
+> change within seconds and performs the rollout. The new pod starts with the
+> updated values. This is why the demo works: git push → ArgoCD syncs ConfigMap
+> → Reloader triggers rollout → new pod picks up `BRIDGE_DELAY_MS`.
 
 ### Demo sequence
 
@@ -232,6 +235,66 @@ restarted yet. Watch for the rollout to complete:
 kubectl rollout status deployment/mqtt-bridge -n sensor-dev
 # Expected: successfully rolled out
 ```
+
+**Quick grep to confirm Reloader triggered the rollout:**
+
+```bash
+kubectl logs -n kube-system \
+  $(kubectl get pod -n kube-system -l app.kubernetes.io/name=reloader \
+    -o jsonpath='{.items[0].metadata.name}') \
+  --tail=20 | grep -i "mqtt-bridge\|sensor-config"
+# Expected: Changes Detected in mqtt-bridge ... Rolling upgrade
+```
+
+### Developer troubleshooting workflow
+
+If Kibana is not reacting after a `BRIDGE_DELAY_MS` change, work through this
+checklist top to bottom — each step rules out a layer:
+
+**1. Did ArgoCD sync?**
+
+```bash
+kubectl get configmap sensor-config -n sensor-dev \
+  -o jsonpath='{.data.BRIDGE_DELAY_MS}'
+# If still 0: ArgoCD hasn't synced. Force it:
+kubectl annotate application sensor-demo-dev \
+  -n argocd argocd.argoproj.io/refresh=hard --overwrite
+```
+
+**2. Did Reloader trigger the rollout?**
+
+```bash
+kubectl rollout status deployment/mqtt-bridge -n sensor-dev
+# If stuck: check Reloader logs (command above)
+# If Reloader pod is missing: helm install reloader (see rebuild-runbook Step 27)
+```
+
+**3. Did the new pod start with the updated value?**
+
+```bash
+kubectl logs -n sensor-dev \
+  $(kubectl get pod -n sensor-dev -l app=mqtt-bridge \
+    -o jsonpath='{.items[0].metadata.name}') \
+  -c mqtt-bridge --tail=5 | grep "Bridge delay"
+# If still shows old value: pod may not have fully restarted — wait 30s and retry
+```
+
+**4. Is the delay showing in traces?**
+
+In Kibana Discover (OTel Traces index), filter:
+- `resource.attributes.service.name: mqtt-bridge`
+- `name: bridge-sensor-reading`
+- Sort by `@timestamp` descending
+
+Check the `duration` field — with a 2000ms delay expect values around `2,000,000,000`
+(nanoseconds). If spans are absent entirely, check that the OTel gateway pod is
+running: `kubectl get pods -n observability`.
+
+**5. Is Kibana's time range covering the new data?**
+
+Switch to **Last 15 minutes** during active demos. The Service Latency panel
+aggregates over the selected window — if the window is too wide the spike is
+visually diluted by the pre-change baseline.
 
 ### Kibana panel reference for the demo
 

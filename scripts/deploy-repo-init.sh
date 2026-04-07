@@ -166,6 +166,7 @@ spec:
       labels:
         app: sensor-producer
       annotations:
+        reloader.stakater.com/auto: "true"
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "sensor-producer"
         vault.hashicorp.com/agent-inject-secret-mqtt.env: "secret/data/apps/mqtt"
@@ -215,6 +216,7 @@ spec:
       labels:
         app: mqtt-bridge
       annotations:
+        reloader.stakater.com/auto: "true"
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "mqtt-bridge"
         vault.hashicorp.com/agent-inject-secret-mqtt.env: "secret/data/apps/mqtt"
@@ -273,6 +275,7 @@ spec:
       labels:
         app: event-consumer
       annotations:
+        reloader.stakater.com/auto: "true"
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "event-consumer"
         vault.hashicorp.com/agent-inject-secret-kafka.env: "secret/data/apps/kafka"

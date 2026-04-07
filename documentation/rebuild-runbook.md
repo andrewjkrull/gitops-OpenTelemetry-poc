@@ -1138,6 +1138,107 @@ kubectl logs -n sensor-dev \
 
 ---
 
+## Phase 5a — Kibana Dashboards
+
+See `documentation/observability-setup.md` for the full build runbook.
+
+---
+
+## Phase 5b — Reloader
+
+Reloader (Stakater) watches ConfigMaps and Secrets and triggers rolling restarts
+on any Deployment annotated with `reloader.stakater.com/auto: "true"`. This is
+what makes the Phase 5b latency injection demo work: ArgoCD syncs the updated
+ConfigMap, Reloader detects the change and performs the rollout, and the new pod
+picks up the new `BRIDGE_DELAY_MS` value without any manual intervention.
+
+### Step 27 — Install Reloader
+
+```bash
+helm repo add stakater https://stakater.github.io/stakater-charts
+helm repo update
+
+helm upgrade --install reloader stakater/reloader \
+  --namespace kube-system \
+  --set reloader.watchGlobally=false
+```
+
+> `watchGlobally=false` limits Reloader to only acting on Deployments that carry
+> the opt-in annotation — it will not trigger restarts cluster-wide on every
+> ConfigMap change. This is the correct setting for a shared cluster.
+
+Wait for the pod to be ready:
+
+```bash
+kubectl rollout status deployment/reloader-reloader -n kube-system
+kubectl get pods -n kube-system -l app.kubernetes.io/name=reloader
+# Expected: 1/1 Running
+```
+
+### Step 27b — Verify annotations on app Deployments
+
+The three app Deployments must carry the Reloader opt-in annotation in their
+pod template metadata. This is written by `deploy-repo-init.sh`. Verify after
+the first ArgoCD sync:
+
+```bash
+for APP in sensor-producer mqtt-bridge event-consumer; do
+  echo -n "${APP}: "
+  kubectl get deployment ${APP} -n sensor-dev \
+    -o jsonpath='{.spec.template.metadata.annotations.reloader\.stakater\.com/auto}'
+  echo ""
+done
+# Expected: true (for each app)
+```
+
+If any show blank, the annotation is missing from the base manifest. Check
+`base/sensor-producer.yaml` (and siblings) in `sensor-demo-deploy` — the
+annotation belongs under `spec.template.metadata.annotations`, not at the
+Deployment metadata level.
+
+### Step 27c — Smoke test
+
+Trigger a ConfigMap change and confirm Reloader responds:
+
+```bash
+# 1. Note current pod names before the change
+kubectl get pods -n sensor-dev -l app=mqtt-bridge
+
+# 2. Make a trivial ConfigMap change (or use the BRIDGE_DELAY_MS demo knob
+#    via Gitea — see platform-demo-playbook.md). Here we patch directly for
+#    a quick smoke test only — in normal operation always go through git:
+kubectl patch configmap sensor-config -n sensor-dev \
+  --type merge -p '{"data":{"BRIDGE_DELAY_MS":"100"}}'
+
+# 3. Watch Reloader react — should trigger within ~5 seconds
+kubectl logs -n kube-system \
+  $(kubectl get pod -n kube-system -l app.kubernetes.io/name=reloader \
+    -o jsonpath='{.items[0].metadata.name}') \
+  --tail=20 | grep -i "mqtt-bridge\|sensor-config"
+# Expected: Changes Detected in mqtt-bridge ... Rolling upgrade
+
+# 4. Confirm rollout
+kubectl rollout status deployment/mqtt-bridge -n sensor-dev
+# Expected: successfully rolled out
+
+# 5. Confirm new pod picked up the value
+kubectl logs -n sensor-dev \
+  $(kubectl get pod -n sensor-dev -l app=mqtt-bridge \
+    -o jsonpath='{.items[0].metadata.name}') \
+  -c mqtt-bridge --tail=10 | grep "Bridge delay"
+# Expected: Bridge delay: 100ms
+
+# 6. Reset via git (correct operational pattern)
+#    Open https://gitea.test/poc/sensor-demo-deploy
+#    Set BRIDGE_DELAY_MS back to "0" in envs/dev/kustomization.yaml and commit
+```
+
+> **Important:** the direct `kubectl patch` above is for smoke-testing only.
+> In the actual demo and in normal operation, all ConfigMap changes go through
+> git → ArgoCD. Direct patches are overwritten on the next ArgoCD sync.
+
+---
+
 ## Session restart procedure
 
 After any server reboot or cluster restart:
