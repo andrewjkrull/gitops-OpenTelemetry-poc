@@ -202,7 +202,12 @@ subdirectories.
 > does this for `kube/config` for example. If you ever hit a permission denied
 > error on a file in a runtime directory, fix it with:
 > ```bash
-> sudo chown -R $(id -u):$(id -g) >   ${POC_DIR}/kube >   ${POC_DIR}/tmp >   ${POC_DIR}/helm-cache >   ${POC_DIR}/helm-config
+> sudo chown -R $(id -u):$(id -g) \
+>   ${POC_DIR}/vault \
+>   ${POC_DIR}/kube \
+>   ${POC_DIR}/tmp \
+>   ${POC_DIR}/helm-cache \
+>   ${POC_DIR}/helm-config
 > ```
 
 ### CA certificate (one-time per machine)
