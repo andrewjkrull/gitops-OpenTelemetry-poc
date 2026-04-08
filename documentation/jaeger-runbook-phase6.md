@@ -69,8 +69,8 @@ other `.test` service.
 
 | Component | Version |
 |-----------|---------|
-| Jaeger all-in-one | `jaegertracing/all-in-one:1.57` |
-| Jaeger Helm chart | `jaegertracing/jaeger` 3.x |
+| Jaeger all-in-one | `jaegertracing/all-in-one:2.17.0` |
+| Jaeger Helm chart | `jaegertracing/jaeger` 4.7.0 |
 | OTLP gRPC port | 4317 (standard — already open on OTel gateway pod) |
 
 ---
@@ -191,7 +191,7 @@ allInOne:
   image:
     registry: docker.io
     repository: jaegertracing/all-in-one
-    tag: "1.57"
+    tag: "2.17.0"
   extraEnv:
     - name: COLLECTOR_OTLP_ENABLED
       value: "true"
@@ -242,16 +242,21 @@ kubectl get pods -n observability -l app.kubernetes.io/name=jaeger
 # Expected: jaeger-XXXXX   1/1   Running
 ```
 
-Verify the OTLP gRPC port is listening inside the pod:
+Verify the OTLP gRPC port is reachable from within the cluster:
 
 ```bash
-JAEGER_POD=$(kubectl get pod -n observability -l app.kubernetes.io/name=jaeger \
-  -o jsonpath='{.items[0].metadata.name}')
-
-kubectl exec -n observability ${JAEGER_POD} -- \
-  /bin/sh -c 'ss -tlnp | grep 4317'
-# Expected: LISTEN  0  ...  *:4317
+kubectl run tmp-shell --rm -it --restart=Never \
+  --image=busybox -n observability \
+  -- sh -c 'nc -zv jaeger.observability.svc.cluster.local 4317'
+# Expected: jaeger.observability.svc.cluster.local (x.x.x.x:4317) open
 ```
+
+> A `1/1 Running` pod is sufficient confirmation to proceed — `ss` is not
+> available in the Jaeger container image.
+>
+> Note: in all-in-one mode the Helm chart creates a single service named `jaeger`
+> (not `jaeger-collector` or `jaeger-query`). All ports — OTLP, UI, query — are
+> on this one service.
 
 ---
 
@@ -297,7 +302,7 @@ spec:
     - match: Host(`jaeger.test`)
       kind: Rule
       services:
-        - name: jaeger-query
+        - name: jaeger
           port: 16686
   tls:
     secretName: jaeger-tls
@@ -323,11 +328,16 @@ kubectl get certificate -n observability jaeger-tls -w
 ### Step 6 — Update OTel gateway ConfigMap (fan-out)
 
 > ⚠️ **This is the only step that modifies an existing resource.**
+>
+> The existing `manifests/otel-gateway-config.yaml` is **not touched**. A new
+> separate file `otel-gateway-config-phase6.yaml` is written and applied instead.
+> This preserves the working base config as a clean rollback target — to undo
+> Phase 6 you simply reapply the original file.
 
 The OTel gateway ConfigMap gets a second exporter added to the traces pipeline.
 The Elasticsearch exporter and all other pipelines are left completely unchanged.
 
-**What changes:**
+**What changes in the ConfigMap:**
 - `exporters:` block — add `otlp/jaeger` exporter entry
 - `service.pipelines.traces.exporters:` — append `otlp/jaeger` to the existing list
 
@@ -336,17 +346,27 @@ The Elasticsearch exporter and all other pipelines are left completely unchanged
 - The `metrics` and `logs` pipelines
 - Receivers and processors
 
-**First — read the live ConfigMap before touching it:**
+**Important:** do not apply this file until Jaeger is confirmed running (Step 4
+complete, pod `1/1 Running`). The OTel collector validates all configured exporters
+at startup — if `jaeger.observability.svc.cluster.local:4317` is not reachable the
+gateway pod will fail to start and take down the entire trace pipeline.
+
+**First — confirm the live ConfigMap matches the base file before touching anything:**
 
 ```bash
 kubectl get configmap otel-collector-gateway-config -n observability -o yaml
-# Confirm this matches what you expect before proceeding
+# Confirm this matches manifests/otel-gateway-config.yaml before proceeding
 ```
 
-**Updated ConfigMap** — additions are marked with `# <-- Phase 6`:
+**Create the Phase 6 config file** — new file, base config is untouched:
+
+**File:** `${POC_DIR}/manifests/otel-gateway-config-phase6.yaml`
 
 ```bash
-cat > ${POC_DIR}/manifests/otel-gateway-config.yaml << 'YAML'
+cat > ${POC_DIR}/manifests/otel-gateway-config-phase6.yaml << 'YAML'
+# Phase 6 OTel gateway config — adds Jaeger fan-out to the traces pipeline.
+# DO NOT apply this until Jaeger is confirmed running (Step 4 complete).
+# To roll back: kubectl apply -f /work/otel-gateway-config.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -388,7 +408,7 @@ data:
           max_requests: 3
       # --- new (Phase 6) ---
       otlp/jaeger:
-        endpoint: jaeger-collector.observability.svc.cluster.local:4317
+        endpoint: jaeger.observability.svc.cluster.local:4317
         tls:
           insecure: true
 
@@ -415,14 +435,16 @@ YAML
 Apply and restart:
 
 ```bash
-kubectl apply -f /work/otel-gateway-config.yaml
+kubectl apply -f /work/otel-gateway-config-phase6.yaml
 ```
 
 Check whether the gateway deployment carries the Reloader annotation:
 
 ```bash
-kubectl get deployment -n observability otel-gateway \
-  -o jsonpath='{.metadata.annotations}' | jq
+kubectl get deployment -n observability otel-collector-gateway \
+  -o jsonpath='{.metadata.annotations}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reloader.stakater.com/auto','not set'))"
+# Expected if Reloader is active: true
+# Expected if not configured:     not set
 ```
 
 If `reloader.stakater.com/auto: "true"` is present, Reloader will restart the
@@ -431,11 +453,11 @@ pod automatically within 30 seconds — skip the manual rollout below.
 If the annotation is **not** present:
 
 ```bash
-kubectl annotate deployment otel-gateway -n observability \
+kubectl annotate deployment otel-collector-gateway -n observability \
   reloader.stakater.com/auto=true --overwrite
 
-kubectl rollout restart deployment/otel-gateway -n observability
-kubectl rollout status deployment/otel-gateway -n observability
+kubectl rollout restart deployment/otel-collector-gateway -n observability
+kubectl rollout status deployment/otel-collector-gateway -n observability
 # Expected: successfully rolled out
 ```
 
@@ -450,7 +472,7 @@ kubectl logs -n observability -l app=otel-collector-gateway --tail=50 \
 
 > ⚠️ **If the gateway pod enters CrashLoopBackOff** — roll back immediately:
 > ```bash
-> kubectl rollout undo deployment/otel-gateway -n observability
+> kubectl rollout undo deployment/otel-collector-gateway -n observability
 > ```
 > Then check the logs for a YAML indentation error. The `config.yaml` content
 > inside the ConfigMap `data` block must be indented by exactly 4 spaces.
@@ -461,23 +483,17 @@ kubectl logs -n observability -l app=otel-collector-gateway --tail=50 \
 
 Wait 60 seconds after the gateway restart, then check.
 
-Quick CLI check via port-forward:
+**API check:**
 
 ```bash
-# In a new terminal:
-kubectl port-forward svc/jaeger-query -n observability 16686:16686 &
-
-# After 5 seconds:
-curl -s 'http://localhost:16686/api/services' | jq '.data[]'
+curl -s 'https://jaeger.test/api/services' | jq '.data[]'
 # Expected: "sensor-producer", "mqtt-bridge", "event-consumer", "traefik"
-
-kill %1
 ```
 
 If the services list is empty, wait another 60 seconds — the sensor apps generate
 one trace per second so Jaeger will populate quickly once the gateway is forwarding.
 
-Browser check:
+**Browser check:**
 
 ```
 https://jaeger.test
@@ -496,7 +512,7 @@ Add to `${POC_DIR}/documentation/poc-toolkit.zsh` after the existing Kibana alia
 
 ```zsh
 # Phase 6 — Jaeger
-alias pf-jaeger='kubectl port-forward svc/jaeger-query -n observability 16686:16686'
+alias pf-jaeger='kubectl port-forward svc/jaeger -n observability 16686:16686'
 ```
 
 Reload:
@@ -519,11 +535,11 @@ Run this sequence after all steps are complete.
 ```bash
 kubectl get pods -n observability
 # Must all be Running:
-#   elasticsearch-es-*    1/1
-#   kibana-kb-*           1/1
-#   otel-gateway-*        1/1
-#   otel-daemonset-*      1/1  (3 pods)
-#   jaeger-*              1/1  (new)
+#   elasticsearch-es-*             1/1
+#   kibana-kb-*                    1/1
+#   otel-collector-gateway-*       1/1
+#   otel-collector-daemonset-*     1/1  (3 pods)
+#   jaeger-*                       1/1  (new)
 
 kubectl get certificate -n observability jaeger-tls
 # READY: True
@@ -619,13 +635,13 @@ kubectl logs -n observability -l app=otel-collector-gateway --tail=100 | grep -i
 
 # 2. Does the Jaeger collector service have endpoints?
 kubectl get svc -n observability | grep jaeger
-kubectl get endpoints -n observability jaeger-collector
+kubectl get endpoints -n observability jaeger
 
 # 3. Can the gateway pod reach Jaeger?
 GW_POD=$(kubectl get pod -n observability -l app=otel-collector-gateway \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -n observability ${GW_POD} -- \
-  /bin/sh -c 'nc -zv jaeger-collector.observability.svc.cluster.local 4317'
+  /bin/sh -c 'nc -zv jaeger.observability.svc.cluster.local 4317'
 # Expected: succeeded
 ```
 
@@ -635,8 +651,8 @@ kubectl exec -n observability ${GW_POD} -- \
 
 ```bash
 # Immediate rollback
-kubectl rollout undo deployment/otel-gateway -n observability
-kubectl rollout status deployment/otel-gateway -n observability
+kubectl rollout undo deployment/otel-collector-gateway -n observability
+kubectl rollout status deployment/otel-collector-gateway -n observability
 
 # Read the error
 kubectl logs -n observability -l app=otel-collector-gateway --previous | tail -30
@@ -653,7 +669,7 @@ The `config.yaml` content must be indented 4 spaces under the `data:` key.
 kubectl get ingressroute -n observability jaeger
 kubectl get certificate -n observability jaeger-tls
 kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=30 | grep jaeger
-kubectl get svc -n observability jaeger-query
+kubectl get svc -n observability jaeger
 ```
 
 ---
@@ -675,16 +691,14 @@ kubectl logs -n observability -l app=otel-collector-gateway --tail=200 \
 **Roll back the OTel gateway config:**
 
 ```bash
-# Option A: rollout undo (fastest)
-kubectl rollout undo deployment/otel-gateway -n observability
-
-# Option B: restore from file
-# Edit ${POC_DIR}/manifests/otel-gateway-config.yaml
-# Remove the otlp/jaeger exporter block
-# Remove 'otlp/jaeger' from traces pipeline exporters list
+# Reapply the original base config — removes the Jaeger exporter entirely
 kubectl apply -f /work/otel-gateway-config.yaml
-kubectl rollout restart deployment/otel-gateway -n observability
+kubectl rollout restart deployment/otel-collector-gateway -n observability
+kubectl rollout status deployment/otel-collector-gateway -n observability
 ```
+
+> `otel-gateway-config.yaml` (the base file) was never modified during Phase 6
+> so it is always a clean rollback target.
 
 **Remove Jaeger entirely:**
 
@@ -715,15 +729,15 @@ After completing this phase, update `CONTEXT.md`:
 
 | Component | Version |
 |-----------|---------|
-| Jaeger all-in-one | 1.57 |
-| Jaeger Helm chart | jaegertracing/jaeger 3.x |
+| Jaeger all-in-one | 2.17.0 |
+| Jaeger Helm chart | jaegertracing/jaeger 4.7.0 |
 
 **What is built and working — add after Phase 5a:**
 
 ```
 ### Phase 6 — Jaeger Distributed Tracing ✅
 
-- Jaeger all-in-one 1.57 in observability namespace, in-memory storage
+- Jaeger all-in-one 2.17.0 in observability namespace, in-memory storage
 - OTel gateway fan-out: traces → Elasticsearch AND Jaeger simultaneously
 - Jaeger UI at https://jaeger.test — full trace waterfall, service dependency graph
 - 4-span trace (sensor-producer → mqtt-bridge → event-consumer) visible end-to-end

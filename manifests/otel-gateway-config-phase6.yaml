@@ -1,0 +1,65 @@
+# Phase 6 OTel gateway config — adds Jaeger fan-out to the traces pipeline.
+# DO NOT apply this until Jaeger is confirmed running (Step 4 complete).
+# To roll back: kubectl apply -f /work/otel-gateway-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-gateway-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 200
+        spike_limit_mib: 50
+
+    exporters:
+      # --- existing (unchanged) ---
+      elasticsearch:
+        endpoints:
+          - https://elasticsearch-es-http.observability.svc.cluster.local:9200
+        user: elastic
+        password: ${env:ES_PASSWORD}
+        tls:
+          insecure_skip_verify: true
+        flush:
+          interval: 5s
+          bytes: 5242880
+        retry:
+          enabled: true
+          max_requests: 3
+      # --- new (Phase 6) ---
+      otlp/jaeger:
+        endpoint: jaeger.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      telemetry:
+        logs:
+          level: warn
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch, otlp/jaeger]   # <-- Phase 6: fan-out added

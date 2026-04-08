@@ -11,7 +11,7 @@ spec:
     - match: Host(`jaeger.test`)
       kind: Rule
       services:
-        - name: jaeger-query
+        - name: jaeger
           port: 16686
   tls:
     secretName: jaeger-tls
