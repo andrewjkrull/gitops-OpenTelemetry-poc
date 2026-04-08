@@ -1,0 +1,14 @@
+# Phase 6 — cert-manager Certificate for jaeger.test
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jaeger-tls
+  namespace: observability
+spec:
+  secretName: jaeger-tls
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+  commonName: jaeger.test
+  dnsNames:
+    - jaeger.test

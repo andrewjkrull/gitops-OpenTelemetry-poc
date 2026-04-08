@@ -1,0 +1,40 @@
+# Phase 6 — Jaeger all-in-one
+# In-memory storage: data is lost on pod restart (PoC only)
+
+provisionDataStore:
+  cassandra: false
+  elasticsearch: false
+  kafka: false
+
+allInOne:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: jaegertracing/all-in-one
+    tag: "1.57"
+  extraEnv:
+    - name: COLLECTOR_OTLP_ENABLED
+      value: "true"
+    - name: SPAN_STORAGE_TYPE
+      value: memory
+    - name: MEMORY_MAX_TRACES
+      value: "50000"
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 256Mi
+      cpu: 100m
+
+# Disable components not needed for all-in-one mode
+collector:
+  enabled: false
+query:
+  enabled: false
+agent:
+  enabled: false
+
+# Ports used:
+#   16686 — Jaeger UI / query HTTP
+#   4317  — OTLP gRPC receiver (OTel collector fan-out)
+#   4318  — OTLP HTTP receiver
