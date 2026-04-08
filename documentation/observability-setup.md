@@ -13,14 +13,14 @@ Do not skip this if rebuilding from scratch. Full commands are in the **Commands
 | 4 | `attributes.sensor.trend` and `sensor.delta` present | [Check 4](#check-4--sensor-fields-on-bridge-spans) | trend values: `rising`, `falling`, `stable`; delta stored as **string keyword** — not float |
 | 5 | `status.code` format and values | [Check 5](#check-5--statuscode-values) | String keyword: `Unset` (baseline) and `Error` (confirmed present) |
 | 6 | Error spans identity | [Check 6](#check-6--error-span-identity) | 2 Traefik `ReverseProxy` spans, HTTP 401 from ArgoCD UI — not sensor pipeline errors |
-| 7 | `body.text` field mapping in logs index | [Check 7](#check-7--bodytext-field-mapping) | Mapped as `keyword` — requires wildcard syntax `body.text:*trace*` in Lucene mode |
+| 7 | `body.text` field mapping in logs index | [Check 7](#check-7--bodytext-field-mapping) | Mapped as `keyword` — not used for panel queries; `trace_id` structured field used instead |
 | 8 | `trace_id` and `span_id` on log documents | [Check 8](#check-8--trace_id-on-log-documents) | Present as structured keyword fields — OTel logging bridge active on all three apps |
 
 **Key implications:**
 - `attributes.sensor.delta` is a string keyword — do not use in numeric Lens aggregations
 - Error panel: adding a Traefik exclusion filter causes "No results" when no sensor errors exist, rendering a blank panel. Use `status.code: Error` alone and accept Traefik 401 spikes as background noise
-- `body.text` is keyword-mapped — KQL and Lucene full-text search both fail; use `body.text:*trace*` wildcard in Lucene mode
-- `trace_id` and `span_id` are now structured keyword fields on log documents — the OTel logging bridge is active on all three sensor apps. Use KQL exact match `trace_id: "<32-char-id>"` for log-to-trace correlation. The `body.text` wildcard approach still works but is no longer needed
+- `body.text` is keyword-mapped — not used for panel queries. If body text search is needed, use `body.text:*value*` wildcard in Lucene mode in Discover
+- `trace_id` and `span_id` are structured keyword fields on log documents — use KQL exact match `trace_id: "<32-char-id>"` for log-to-trace correlation across all panels
 
 ---
 
@@ -38,7 +38,7 @@ Do not skip this if rebuilding from scratch. Full commands are in the **Commands
 | Sensor value | `attributes.sensor.value` | float |
 | Sensor trend | `attributes.sensor.trend` | keyword: `rising`, `falling`, `stable` — only on `bridge-sensor-reading` spans |
 | Sensor delta | `attributes.sensor.delta` | keyword (stored as string — not usable in numeric aggregations) |
-| Log body | `body.text` | keyword — use `body.text:*value*` wildcard in Lucene mode |
+| Log body | `body.text` | keyword — not used for panel queries; use Lucene wildcard `body.text:*value*` in Discover if body text search is needed |
 | Log file path | `attributes.log.file.path` | keyword — use `*appname*` wildcard to identify app |
 | Log trace ID | `trace_id` | keyword — structured field on log documents; KQL exact match works |
 | Log span ID | `span_id` | keyword — structured field on log documents |
@@ -60,37 +60,43 @@ Do not skip this if rebuilding from scratch. Full commands are in the **Commands
 
 ---
 
-## Part 1 — Import data views
+## Part 1 — Import the complete dashboard
 
-The `sensor-demo-kibana.ndjson` file pre-creates data views and the dashboard shell.
-Import it first to avoid building panels against missing data views.
+The `sensor-demo-kibana-complete.ndjson` file contains all 10 saved objects: both data
+views, all four Lens panels, all three saved searches, and the dashboard. Import it via
+the API to get a fully working dashboard in one step.
 
-1. Open `https://kibana.test` and log in (`elastic` / `es-pass`)
-2. Navigate to **Stack Management → Saved Objects**
-3. Click **Import**
-4. Upload `documentation/sensor-demo-kibana.ndjson`
-5. Select **Overwrite all** → click **Import**
+```bash
+ES_PASS=$(kubectl get secret elasticsearch-es-elastic-user \
+  -n observability -o jsonpath='{.data.elastic}' | base64 -d | tr -d '\r\n')
 
-**Expected result:**
+curl -sk -u "elastic:${ES_PASS}" \
+  -X POST "https://kibana.test/api/saved_objects/_import?overwrite=true" \
+  -H "kbn-xsrf: true" \
+  --form file=@${POC_DIR}/documentation/sensor-demo-kibana-complete.ndjson \
+  | jq '{success, successCount, errors: [.errors[]?.id]}'
+```
 
-| Object | Expected outcome |
-|---|---|
-| `Sensor Demo — Observability Overview` (dashboard) | Imported successfully |
-| `logs-generic.otel-default` (data view) | Imported successfully |
-| `traces-generic.otel-default` (data view) | Imported successfully |
-| 4 visualization stubs | Error — expected, safe to ignore |
+**Expected output:**
+```json
+{
+  "success": true,
+  "successCount": 10,
+  "errors": []
+}
+```
 
-The 4 visualization stubs (`Service Latency Over Time`, `Event Throughput`, `Sensor Trend Distribution`,
-`Error Span Rate Over Time`) will fail with an error in Kibana 8.17. This is expected — the stubs
-contain empty Lens state (`aggs: []`) which Kibana 8 rejects as invalid. They are not needed;
-all panels are built manually in Lens as described in Part 3. The dashboard shell and both data
-views are what matter.
+After import, open `https://kibana.test` → **Dashboards** → `Sensor Demo — Observability Overview`.
 
-> **If the import shows warnings about `migrationVersion`:** Kibana 8 accepts the 7.x
-> index-pattern format on import but upgrades it internally. Warnings are safe to dismiss.
-> If data views are missing after import, create them manually (see below).
+> **If panels show "No results" after import:** Open each affected panel in **Visualize Library**,
+> click into the Lens editor, and click **Save and return** without making any changes. This
+> forces Kibana to re-initialize the panel state. Known Kibana 8.17 behaviour on imported Lens objects.
 
-**Manual data view creation (fallback):**
+> **If the pie chart shows an error:** Delete it and rebuild manually — see Panel 3 instructions
+> in Part 3 below. The pie chart Lens schema is sensitive to Kibana version and may not survive
+> import across rebuilds. All other panels import reliably.
+
+**Manual data view creation (fallback if import fails):**
 
 1. **Stack Management → Data Views → Create data view**
 2. Name: `traces-generic.otel-default` / Index pattern: `traces-generic.otel-default` / Timestamp: `@timestamp`
@@ -100,7 +106,8 @@ views are what matter.
 
 ## Part 2 — Verify data views have correct field mappings
 
-Before building panels, confirm the data views resolved their fields.
+Skip this step if the import succeeded with `successCount: 10`. Only needed if data
+views were created manually or fields are missing from Lens pickers.
 
 1. **Stack Management → Data Views → traces-generic.otel-default**
 2. Search for each field: `name`, `duration`, `resource.attributes.service.name`, `status.code`, `attributes.sensor.trend`
@@ -111,10 +118,13 @@ Before building panels, confirm the data views resolved their fields.
 
 ---
 
-## Part 3 — Build the six panels
+## Part 3 — Manual panel build (rebuild reference)
 
-Navigate to **Analytics → Dashboards → Sensor Demo — Observability Overview** (imported above)
-or create a new dashboard. Set time range to **Last 1 hour** before building panels.
+This section documents how to build each panel from scratch. Use this if the import
+from Part 1 fails or if individual panels need to be recreated after a PVC wipe.
+
+Navigate to **Analytics → Visualize Library** → **Create visualization** for Lens panels,
+or **Analytics → Discover** for saved searches. Set time range to **Last 1 hour** before building.
 
 All panels use the **traces-generic.otel-default** data view unless noted.
 
@@ -178,20 +188,18 @@ All panels use the **traces-generic.otel-default** data view unless noted.
 **Type:** Pie chart — shows proportion of rising/falling/stable readings.
 **Demonstrates:** Redis enrichment — trend classification is added by mqtt-bridge from previous-value comparison.
 
-1. **Add panel → Create visualization**
+1. **Create visualization**
 2. Chart type: **Pie**
 3. Data view: `traces-generic.otel-default`
-4. Add KQL filter: `name: bridge-sensor-reading AND attributes.sensor.trend: *`
-5. **Slice by:** `attributes.sensor.trend` → Top values
-6. **Metric:** `attributes.sensor.trend` → Top values
-   > Kibana 8.17 pie charts require an explicit Metric field — the default does not
-   > auto-populate. Add `attributes.sensor.trend` as the Metric as well as the Slice
-   > to get the chart to render.
+4. Add KQL filter: `name: "bridge-sensor-reading"`
+5. **Slice by:** `attributes.sensor.trend` → Top values, size 3
+6. **Metric:** **Count**
+   > Do not set Metric to `attributes.sensor.trend` — this collapses the pie to a single
+   > slice showing only the most frequent value. Count is the correct metric for a
+   > distribution pie chart.
 7. Title: `Sensor Trend Distribution`
-8. **Save and return**
-
-> The `attributes.sensor.trend: *` filter excludes spans where the field is absent
-> (e.g., on the first reading before Redis has a previous value to compare against).
+8. Save to library with id `panel-trend`
+9. **Save and return**
 
 ---
 
@@ -233,12 +241,11 @@ This panel uses **Discover** rather than Lens — Kibana 8 Basic does not includ
 
 1. Navigate to **Analytics → Discover**
 2. Data view: `traces-generic.otel-default`
-3. Switch query language to **Lucene** (dropdown next to the search bar)
-   > `trace_id` is a keyword field — Lucene wildcard searches work reliably; KQL does not.
+3. Query language: **KQL** (default)
 4. Time range: **Last 1 hour**
 5. Search:
    ```
-   name:publish-sensor-reading OR name:bridge-sensor-reading OR name:consume-sensor-event
+   name: "publish-sensor-reading" OR name: "bridge-sensor-reading" OR name: "consume-sensor-event"
    ```
    > This filters to the three main pipeline spans only — one per service per sensor reading.
    > Excludes child spans (redis-cache-write, kafka-publish, etc.) to keep the panel readable.
@@ -254,8 +261,8 @@ This panel uses **Discover** rather than Lens — Kibana 8 Basic does not includ
 **Demo sequence for trace correlation (performed live from the dashboard):**
 1. Find any row in the panel — pick one from `sensor-producer`
 2. Copy the full `trace_id` value from that row
-3. Open a new Discover tab → data view: `traces-generic.otel-default` → **Lucene** mode
-4. Search: `trace_id:<paste full value>` (no space after the colon)
+3. Open a new Discover tab → data view: `traces-generic.otel-default` → KQL mode
+4. Search: `trace_id: "<paste full value>"` (include the quotes)
 5. Show all spans sharing that trace ID across `sensor-producer`, `mqtt-bridge`, and `event-consumer`
 
 > This is the central story of the demo — one sensor reading, one trace ID, visible
@@ -266,27 +273,20 @@ This panel uses **Discover** rather than Lens — Kibana 8 Basic does not includ
 ### Panel 6 — Event Consumer Logs (Saved Search)
 
 **Purpose:** Show event-consumer log lines with structured trace context.
-**Demonstrates:** Structured log-to-trace correlation — `trace_id` is now a proper field on every
+**Demonstrates:** Structured log-to-trace correlation — `trace_id` is a proper field on every
 log document, written by the OTel logging bridge active on all three sensor apps.
-
-**Note on query mode:** KQL mode works for `trace_id` exact match. The `body.text` field is still
-mapped as `keyword` — if you need to search body text use Lucene mode with a wildcard. For this
-panel KQL is sufficient because we are filtering by service name, not body content.
 
 1. Navigate to **Analytics → Discover**
 2. Data view: `logs-generic.otel-default`
 3. Query language: **KQL** (default)
 4. Search:
    ```
-   resource.attributes.service.name: event-consumer
+   resource.attributes.service.name: "event-consumer"
    ```
 5. Set time range to **Last 1 hour**
 6. Add columns: `trace_id`, `span_id`, `attributes.SensorId`, `attributes.Value`, `attributes.Trend`, `body.text`
 7. Sort by `@timestamp` descending
 8. Click **Save** → name: `Event Consumer Logs` → **Save**
-   > If you have a duplicate saved search from before the logging bridge was added,
-   > delete the old one first: **Stack Management → Saved Objects** → search
-   > `Event Consumer Logs` → delete, then recreate.
 9. Return to dashboard → **Add panel → Add from library → Event Consumer Logs**
 
 **Demo sequence for log-trace correlation:**
@@ -341,7 +341,10 @@ all carrying the same `trace_id`. This panel makes that visible at a glance.
 
 ---
 
-## Part 4 — Assemble the dashboard
+## Part 4 — Assemble the dashboard (manual rebuild only)
+
+Only needed when rebuilding panels manually from Part 3. If the Part 1 import
+succeeded, the dashboard is already assembled with the correct layout — skip this.
 
 1. **Analytics → Dashboards → Sensor Demo — Observability Overview**
 2. Add all panels via **Add panel → Add from library**
@@ -366,31 +369,58 @@ all carrying the same `trace_id`. This panel makes that visible at a glance.
 5. Set auto-refresh: **30 seconds** — Edit menu → **Options** → Auto-refresh: 30s
 6. Enable **Store time with dashboard**: Edit menu → **Options** → check **Store time with dashboard**
 7. Click **Save** → name: `Sensor Demo — Observability Overview`
-
-> The dashboard time range overrides individual panel time ranges. Setting to Last 1 hour
-> keeps the log panels fast. Panel 7 (Cross-Service Log Correlation) uses Last 15 minutes
-> internally — narrowing its saved search time range prevents it from loading thousands
-> of rows when the dashboard opens.
+8. Re-export and commit per Part 5
 
 ---
 
-## Part 5 — Export completed dashboard
+## Part 5 — Re-export after changes
 
-Once all panels are built and arranged, export the full dashboard as NDJSON.
-This snapshot can be re-imported after a PVC wipe without rebuilding from scratch.
+The `sensor-demo-kibana-complete.ndjson` file in `documentation/` is the authoritative
+snapshot. After making any changes to panels or the dashboard, re-export and commit:
 
-1. **Stack Management → Saved Objects**
-2. Search for: `Sensor Demo`
-3. Select all matching objects (dashboard + all visualizations + saved searches)
-4. Also select the two data views: `traces-generic.otel-default` and `logs-generic.otel-default`
-5. Click **Export** → save as `sensor-demo-kibana-complete.ndjson`
-6. Copy to `~/Projects/poc/documentation/` and commit
+```bash
+ES_PASS=$(kubectl get secret elasticsearch-es-elastic-user \
+  -n observability -o jsonpath='{.data.elastic}' | base64 -d | tr -d '\r\n')
 
-> Re-import procedure after PVC wipe:
+curl -sk -u "elastic:${ES_PASS}" \
+  -X POST "https://kibana.test/api/saved_objects/_export" \
+  -H "kbn-xsrf: true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "objects": [
+      {"type": "index-pattern", "id": "traces-otel-pattern"},
+      {"type": "index-pattern", "id": "logs-otel-pattern"},
+      {"type": "lens",          "id": "panel-latency"},
+      {"type": "lens",          "id": "panel-throughput"},
+      {"type": "lens",          "id": "panel-trend"},
+      {"type": "lens",          "id": "panel-errors"},
+      {"type": "search",        "id": "search-trace-timeline"},
+      {"type": "search",        "id": "search-consumer-logs"},
+      {"type": "search",        "id": "search-cross-service"},
+      {"type": "dashboard",     "id": "dashboard-sensor-demo"}
+    ],
+    "excludeExportDetails": true
+  }' \
+  > ${POC_DIR}/documentation/sensor-demo-kibana-complete.ndjson
+
+wc -l ${POC_DIR}/documentation/sensor-demo-kibana-complete.ndjson
+# Expected: 10 (note: last line has no trailing newline so wc -l may report 9 — both are correct)
+```
+
+Then commit:
+
+```bash
+cd ${POC_DIR}
+git add documentation/sensor-demo-kibana-complete.ndjson
+git commit -m "docs: update Kibana dashboard export"
+git push
+```
+
+> **Re-import procedure after PVC wipe:**
 > 1. Run `obs-init.sh` (creates index templates)
 > 2. Run `obs-ilm-init.sh` (attaches ILM policy)
 > 3. Wait ~30s for data to flow
-> 4. Import `sensor-demo-kibana-complete.ndjson` via Saved Objects → Import
+> 4. Run the Part 1 import command above
 
 ---
 
@@ -398,19 +428,19 @@ This snapshot can be re-imported after a PVC wipe without rebuilding from scratc
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Import shows version warnings | Kibana 8 upgrading 7.x format — safe | Dismiss and continue |
-| 4 visualization stubs fail on import | Empty Lens state rejected by Kibana 8.17 | Expected — ignore, build panels manually |
+| Import returns 500 | Stale objects in Kibana conflicting | Delete all saved objects first, then reimport |
+| Panel shows "No results" after import | Kibana Lens state not fully initialized | Open panel in Visualize Library, click Save and return without changes |
+| Pie chart errors on open | Lens pie chart schema version mismatch | Delete and rebuild manually per Panel 3 instructions in Part 3 |
 | Data view shows 0 documents | `pf-es` not running, or time range too narrow | Confirm `pf-es` active; widen time range |
 | Field missing from Lens picker | Data view field list stale | Stack Management → Data View → Refresh field list |
 | `attributes.sensor.trend` missing | No `bridge-sensor-reading` spans in time range | Widen time range; check mqtt-bridge logs |
 | `attributes.sensor.delta` formula fails | Field is stored as keyword string, not float | Do not use in numeric aggregation |
-| Pie chart shows no data | Metric field not set | Add `attributes.sensor.trend` explicitly as both Slice and Metric |
+| Pie chart shows single slice only | Metric set to `attributes.sensor.trend` instead of Count | Set Metric to Count |
 | Error panel shows "No results" | Traefik exclusion filter active with no sensor errors | Remove `is not traefik` filter — use `status.code: Error` alone |
 | Error panel Y-axis at 5000+ | Filter not applied — counting all spans | Use structured filter form, not raw KQL bar |
-| Log panel search returns nothing | Wrong query language or wrong wildcard syntax | Switch to **Lucene**; use `body.text:*trace*` not `body.text:trace` |
 | `trace_id` not showing on log documents | Old pods still running pre-bridge image | Check image SHAs: `kubectl get pods -n sensor-dev -o wide`; verify CI built new images |
 | Panel 7 loads slowly | Time range too wide for three-service log volume | Ensure saved search is scoped to Last 15 minutes, not the dashboard override |
-| Log panel very slow to load | Leading wildcard on 5M+ keyword field | Narrow dashboard time range to Last 1 hour |
+| Log panel very slow to load | Large log volume with wide time range | Narrow dashboard time range to Last 1 hour |
 | Search Sessions deprecation warning | Kibana 8.15+ cosmetic warning | Safe to ignore |
 | Dashboard time range resets on reload | Store time option not enabled | Edit → Options → enable **Store time with dashboard** → Save |
 | Lens formula rejected | Formula entered in wrong metric type | Confirm using **Formula** function, not Percentile or Average |
@@ -474,11 +504,18 @@ bash ~/Projects/poc/scripts/obs-ilm-init.sh   # 2h ILM policy
 # Verify data is flowing — see Check 2 in Commands section below
 # All four services should appear with doc_count > 0
 
-# Then in Kibana:
-# 1. Import sensor-demo-kibana.ndjson (data views + dashboard shell)
-# 2. Build panels per this runbook
-# 3. Export completed dashboard as sensor-demo-kibana-complete.ndjson
-# 4. Commit to documentation/
+# Import the complete dashboard (data views + all panels + dashboard)
+ES_PASS=$(kubectl get secret elasticsearch-es-elastic-user \
+  -n observability -o jsonpath='{.data.elastic}' | base64 -d | tr -d '\r\n')
+
+curl -sk -u "elastic:${ES_PASS}" \
+  -X POST "https://kibana.test/api/saved_objects/_import?overwrite=true" \
+  -H "kbn-xsrf: true" \
+  --form file=@${POC_DIR}/documentation/sensor-demo-kibana-complete.ndjson \
+  | jq '{success, successCount, errors: [.errors[]?.id]}'
+
+# If any panels show "No results": open in Visualize Library, Save and return
+# If pie chart errors: rebuild manually per Part 3 Panel 3 instructions
 ```
 
 ---
@@ -728,8 +765,8 @@ curl -sk -u "elastic:${ES_PASS}" \
 `body.text` is a `keyword` field — not `text`. This means:
 - KQL wildcards do not work on it
 - Lucene full-text search does not work on it
-- Lucene wildcard syntax **does** work: `body.text:*trace*`
-- Use **Lucene mode** (not KQL) in Discover for body text searches
+- Lucene wildcard syntax **does** work: `body.text:*trace*` — use **Lucene mode** in Discover if body text search is needed
+- None of the dashboard panels query `body.text` — all panel queries use structured fields (`trace_id`, `resource.attributes.service.name`, `name`, `status.code`)
 
 ---
 
