@@ -581,6 +581,53 @@ poc-stop() {
   runner-stop
 }
 
+poc-sync-from-git() {
+  # Sync tracked files from the git repo into the working poc directory.
+  # Run on your workstation after a git pull to update ~/Projects/poc
+  # without touching runtime state (vault/, kube/, tmp/, etc.).
+  #
+  # Assumes git repo is at ~/Projects/gitops-OpenTelemetry-poc
+  # Override with: poc-sync-from-git /path/to/other/repo
+  #
+  # Usage: poc-sync-from-git
+  #        poc-sync-from-git --dry-run
+
+  local git_repo="${1:-${HOME}/Projects/gitops-OpenTelemetry-poc}"
+  local dry_run=""
+
+  if [[ "${1:-}" == "--dry-run" ]]; then
+    dry_run="--dry-run"
+    git_repo="${HOME}/Projects/gitops-OpenTelemetry-poc"
+    echo "==> DRY RUN — no files will be changed"
+  fi
+
+  if [[ ! -d "${git_repo}/.git" ]]; then
+    echo "ERROR: ${git_repo} is not a git repo."
+    echo "Usage: poc-sync-from-git [/path/to/repo]"
+    return 1
+  fi
+
+  echo "==> Syncing from ${git_repo}"
+  echo "    to           ${POC_DIR}"
+  echo ""
+
+  rsync -av --progress ${dry_run} \
+    --exclude='vault/' \
+    --exclude='kube/' \
+    --exclude='tmp/' \
+    --exclude='helm-cache/' \
+    --exclude='helm-config/' \
+    --exclude='context-history/' \
+    --exclude='.git/' \
+    --exclude='*.pyc' \
+    "${git_repo}/" \
+    "${POC_DIR}/"
+
+  echo ""
+  echo "==> Sync complete"
+  echo "    vault/, kube/, tmp/, helm-cache/ were NOT touched"
+}
+
 context-snapshot() {
   # Save a dated snapshot of CONTEXT.md before starting a new phase
   # Usage: context-snapshot <label>
