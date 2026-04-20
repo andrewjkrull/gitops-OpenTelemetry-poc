@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"labels":{"app":"otel-collector-gateway"},"name":"otel-collector-gateway","namespace":"observability"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"otel-collector-gateway"}},"template":{"metadata":{"labels":{"app":"otel-collector-gateway"}},"spec":{"containers":[{"args":["--config=/conf/config.yaml"],"env":[{"name":"ES_PASSWORD","valueFrom":{"secretKeyRef":{"key":"password","name":"otel-es-credentials"}}}],"image":"otel/opentelemetry-collector-contrib:0.123.0","name":"otel-collector","ports":[{"containerPort":4317,"name":"otlp-grpc"},{"containerPort":4318,"name":"otlp-http"}],"resources":{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}},"volumeMounts":[{"mountPath":"/conf","name":"config"}]}],"serviceAccountName":"otel-collector-gateway","volumes":[{"configMap":{"name":"otel-collector-gateway-config"},"name":"config"}]}}}}
+  creationTimestamp: "2026-04-07T23:32:21Z"
+  generation: 1
+  labels:
+    app: otel-collector-gateway
+  name: otel-collector-gateway
+  namespace: observability
+  resourceVersion: "2294"
+  uid: f35dfa4c-ed29-428e-b4c5-d0287bce67f1
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: otel-collector-gateway
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: otel-collector-gateway
+    spec:
+      containers:
+      - args:
+        - --config=/conf/config.yaml
+        env:
+        - name: ES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: otel-es-credentials
+        image: otel/opentelemetry-collector-contrib:0.123.0
+        imagePullPolicy: IfNotPresent
+        name: otel-collector
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /conf
+          name: config
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: otel-collector-gateway
+      serviceAccountName: otel-collector-gateway
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: otel-collector-gateway-config
+        name: config
+status:
+  availableReplicas: 1
+  conditions:
+  - lastTransitionTime: "2026-04-07T23:32:27Z"
+    lastUpdateTime: "2026-04-07T23:32:27Z"
+    message: Deployment has minimum availability.
+    reason: MinimumReplicasAvailable
+    status: "True"
+    type: Available
+  - lastTransitionTime: "2026-04-07T23:32:21Z"
+    lastUpdateTime: "2026-04-07T23:32:27Z"
+    message: ReplicaSet "otel-collector-gateway-57fcb45b5c" has successfully progressed.
+    reason: NewReplicaSetAvailable
+    status: "True"
+    type: Progressing
+  observedGeneration: 1
+  readyReplicas: 1
+  replicas: 1
+  updatedReplicas: 1

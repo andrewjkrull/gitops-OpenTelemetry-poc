@@ -1,0 +1,62 @@
+apiVersion: v1
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 200
+        spike_limit_mib: 50
+
+    exporters:
+      elasticsearch:
+        endpoints:
+          - https://elasticsearch-es-http.observability.svc.cluster.local:9200
+        user: elastic
+        password: ${env:ES_PASSWORD}
+        tls:
+          insecure_skip_verify: true
+        flush:
+          interval: 5s
+          bytes: 5242880
+        retry:
+          enabled: true
+          max_requests: 3
+
+    service:
+      telemetry:
+        logs:
+          level: warn
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [elasticsearch]
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"config.yaml":"receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n  batch:\n    timeout: 5s\n    send_batch_size: 1024\n  memory_limiter:\n    check_interval: 5s\n    limit_mib: 200\n    spike_limit_mib: 50\n\nexporters:\n  elasticsearch:\n    endpoints:\n      - https://elasticsearch-es-http.observability.svc.cluster.local:9200\n    user: elastic\n    password: ${env:ES_PASSWORD}\n    tls:\n      insecure_skip_verify: true\n    flush:\n      interval: 5s\n      bytes: 5242880\n    retry:\n      enabled: true\n      max_requests: 3\n\nservice:\n  telemetry:\n    logs:\n      level: warn\n  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [elasticsearch]\n    logs:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [elasticsearch]\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [elasticsearch]\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"otel-collector-gateway-config","namespace":"observability"}}
+  creationTimestamp: "2026-04-07T23:32:20Z"
+  name: otel-collector-gateway-config
+  namespace: observability
+  resourceVersion: "2213"
+  uid: d246ecc8-c008-4a45-9df0-54b216e977c0
