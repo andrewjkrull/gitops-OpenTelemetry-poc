@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: otel-collector-gateway
+  namespace: observability
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector-gateway
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s

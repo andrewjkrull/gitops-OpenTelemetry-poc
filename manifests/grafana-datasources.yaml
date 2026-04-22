@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources-lgtm
+  namespace: observability
+  labels:
+    grafana_datasource: "1"
+data:
+  datasources.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        # Update if your loki service is named differently
+        url: http://loki.observability.svc.cluster.local:3100
+        isDefault: false
+        jsonData:
+          derivedFields:
+            # Match against the trace_id structured metadata label attached
+            # automatically by the OTel SDK on every log record. This is more
+            # reliable than regex-scanning the log body, which depends on
+            # per-app logging conventions.
+            #
+            # Field-name gotcha: for label-based matches, `matcherType: label`
+            # is the trigger, and `matcherRegex` is reinterpreted as the
+            # *label name* (not a regex). The field names `type:` and `label:`
+            # used in some older examples are silently ignored and the field
+            # falls back to regex mode, producing 0% matches.
+            - name: TraceID
+              matcherType: label
+              matcherRegex: trace_id
+              url: '$${__value.raw}'
+              datasourceUid: tempo
+              urlDisplayLabel: View trace
+
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        access: proxy
+        # Update if your tempo service is named differently
+        url: http://tempo.observability.svc.cluster.local:3200
+        isDefault: false
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: -1h
+            spanEndTimeShift: 1h
+            tags:
+              - key: service.name
+                value: service_name
+            filterByTraceID: true
+            filterBySpanID: false
+          tracesToMetrics:
+            datasourceUid: prometheus
+            tags:
+              - key: service.name
+                value: service
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+          search:
+            hide: false
+          lokiSearch:
+            datasourceUid: loki
+
+      # Alertmanager — used by Grafana's Alerting UI to display silences,
+      # notification policies, contact points, and alert state. Grafana's
+      # unified alerting (see grafana.ini block in kube-prometheus-stack-values.yaml)
+      # sends its alerts to this same Alertmanager, so one instance handles
+      # notifications from both PrometheusRule CRDs and Grafana-provisioned
+      # alert rules.
+      - name: Alertmanager
+        type: alertmanager
+        uid: alertmanager
+        access: proxy
+        # UPDATE if the kps Alertmanager service is named differently — verify with:
+        #   kubectl get svc -n observability -l app.kubernetes.io/name=alertmanager
+        url: http://kps-alertmanager.observability.svc.cluster.local:9093
+        jsonData:
+          implementation: prometheus
+          handleGrafanaManagedAlerts: true

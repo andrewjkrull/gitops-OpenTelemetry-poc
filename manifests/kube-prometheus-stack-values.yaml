@@ -1,0 +1,94 @@
+# kube-prometheus-stack values — PoC scale
+# Upstream: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+
+fullnameOverride: kps
+
+prometheus:
+  prometheusSpec:
+    # 72h retention for PoC disk discipline. At ~147k active series and
+    # typical kps scrape cadence this lands around 4 GB on disk. 72h gives
+    # three days of context for investigating "when did this start"
+    # questions — enough for the kps default dashboards (which default to
+    # 6h / 24h windows) to remain useful, without letting Prom grow
+    # unbounded. Production AKS will be longer, backed by Thanos.
+    retention: 72h
+    # Required for OTel gateway's prometheusremotewrite exporter
+    enableRemoteWriteReceiver: true
+    # Discover ServiceMonitors and PodMonitors in any namespace, any label
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 100m, memory: 512Mi }
+      limits:   { cpu: 1,    memory: 2Gi  }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources: { requests: { storage: 5Gi } }
+
+alertmanager:
+  # Kept as the unified notification backend. Grafana Alerting (below) sends
+  # its alerts here, and PrometheusRule CRDs deliver here natively. One
+  # Alertmanager, one set of silences, one set of notification policies.
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 10m,  memory: 32Mi }
+      limits:   { cpu: 100m, memory: 128Mi }
+
+grafana:
+  enabled: true
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  persistence:
+    enabled: true
+    size: 1Gi
+  service:
+    type: ClusterIP
+  # Unified alerting (Grafana 8+). Grafana-managed alert rules and
+  # PrometheusRule-originated alerts both flow to the kube-prometheus-stack
+  # Alertmanager. Grafana's Alerting UI shows rules from both sources in
+  # one unified view.
+  # See manifests/alerts/README.md for authoring patterns.
+  grafana.ini:
+    unified_alerting:
+      enabled: true
+    alerting:
+      enabled: false   # legacy (pre-Grafana-8) alerting, off
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_dashboard
+      labelValue: "1"
+    datasources:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_datasource
+      labelValue: "1"
+    # Sidecar for Grafana-provisioned alert rule ConfigMaps. ConfigMaps
+    # labeled grafana_alert=1 are auto-loaded — no pod restart needed.
+    alerts:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_alert
+      labelValue: "1"
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+defaultRules:
+  create: true
+
+# k3d doesn't expose these control-plane ports to the Prometheus scraper
+kubeControllerManager: { enabled: false }
+kubeEtcd:              { enabled: false }
+kubeScheduler:         { enabled: false }
+kubeProxy:             { enabled: false }

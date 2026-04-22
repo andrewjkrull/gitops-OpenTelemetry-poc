@@ -1,0 +1,29 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`grafana.test`)
+      kind: Rule
+      services:
+        - name: kps-grafana
+          port: 80
+  tls:
+    secretName: grafana-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: grafana-tls
+  namespace: observability
+spec:
+  secretName: grafana-tls
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - grafana.test
+  commonName: grafana.test

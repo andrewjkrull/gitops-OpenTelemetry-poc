@@ -127,23 +127,25 @@ alias pf-vault="docker run --rm -it --network host \
   ${TOOLKIT_IMAGE} \
   kubectl port-forward svc/vault -n vault 8200:8200"
 
-# Elasticsearch API — required for index management and obs-init.sh
-# Access: https://127.0.0.1:9200
-alias pf-es="docker run --rm -it --network host \
+# Prometheus UI — direct access. Normal path is Grafana Explore at https://grafana.test.
+# This alias is for inspecting /targets, /rules, /status pages Grafana does not expose.
+# Access: http://<SERVER_IP>:9090 (or http://127.0.0.1:9090 on the host itself)
+alias pf-prom="docker run --rm -it --network host \
   -v ${POC_DIR}/kube:/root/.kube \
   -e KUBECONFIG=/root/.kube/config \
-  --name pf-es \
+  --name pf-prom \
   ${TOOLKIT_IMAGE} \
-  kubectl port-forward svc/elasticsearch-es-http -n observability 9200:9200"
+  kubectl port-forward svc/kps-prometheus -n observability 9090:9090"
 
-# Kibana direct access — only needed to bypass Traefik for debugging
-# Normal access is via https://kibana.test through Traefik
-alias pf-kibana="docker run --rm -it --network host \
+# Alertmanager UI — direct access. Normal path is Grafana's Alerting UI at https://grafana.test.
+# This alias is for inspecting the raw Alertmanager status/config endpoints.
+# Access: http://<SERVER_IP>:9093
+alias pf-alertmanager="docker run --rm -it --network host \
   -v ${POC_DIR}/kube:/root/.kube \
   -e KUBECONFIG=/root/.kube/config \
-  --name pf-kibana \
+  --name pf-alertmanager \
   ${TOOLKIT_IMAGE} \
-  kubectl port-forward svc/kibana-kb-http -n observability 5601:5601"
+  kubectl port-forward svc/kps-alertmanager -n observability 9093:9093"
 
 # NOTE: pf-traefik removed — Traefik service does not expose port 9000.
 # The Traefik API is on container port 8080 but not exposed via the Service.
@@ -363,22 +365,15 @@ poc-sync-pull() {
   echo "    vault/, kube/, tmp/, helm-cache/ were NOT touched"
 }
 
-es-pass() {
-  # Retrieve Elasticsearch password from k8s secret
-  # Pulls directly from k8s — reliable, no ANSI encoding issues
+grafana-pass() {
+  # Retrieve Grafana admin password from the Kubernetes secret.
+  # Pulls directly from k8s — reliable, no ANSI encoding issues.
   # For manual login use the Vault UI at http://127.0.0.1:8200
-  kubectl get secret elasticsearch-es-elastic-user \
+  # (Vault holds the same credential at secret/observability/grafana).
+  kubectl get secret grafana-admin \
     -n observability \
-    -o jsonpath='{.data.elastic}' | base64 -d | tr -d '\r\n'
-}
-
-obs-init() {
-  # Run observability init scripts in order — fresh cluster builds only
-  # Requires: pf-vault and pf-es running in dedicated terminals
-  # obs-init.sh  — creates ES index templates + otel-es-credentials secret
-  # obs-ilm-init.sh — attaches 12h ILM delete policy to all three OTel data streams
-  bash ${POC_DIR}/scripts/obs-init.sh \
-    && bash ${POC_DIR}/scripts/obs-ilm-init.sh
+    -o jsonpath='{.data.admin-password}' | base64 -d | tr -d '\r\n'
+  echo
 }
 
 gitea-token() {
@@ -495,7 +490,6 @@ poc-start() {
   #
   # Fresh cluster build order (run once, follow rebuild-runbook.md):
   #   bash scripts/vault-init.sh
-  #   obs-init
   #   bash scripts/messaging-init.sh
   #   bash scripts/gitea-init.sh
   #   bash scripts/deploy-repo-init.sh
@@ -541,15 +535,15 @@ poc-start() {
   echo "==> Running vault-init.sh..."
   bash ${POC_DIR}/scripts/vault-init.sh
 
-  # Step 5: Wait for Elasticsearch
+  # Step 5: Wait for Grafana to be Ready (primary observability UI entry point)
   echo ""
-  echo "==> Waiting for Elasticsearch to be healthy..."
+  echo "==> Waiting for Grafana to be Ready..."
   docker run --rm --network host \
     -v ${POC_DIR}/kube:/root/.kube \
     -e KUBECONFIG=/root/.kube/config \
     ${TOOLKIT_IMAGE} \
     kubectl wait --for=condition=ready pod \
-      -l elasticsearch.k8s.elastic.co/cluster-name=elasticsearch \
+      -l app.kubernetes.io/name=grafana \
       -n observability --timeout=300s
 
   # Step 6: Start Gitea Actions runner
@@ -562,22 +556,23 @@ poc-start() {
   echo "  https://whoami.test"
   echo "  https://httpbin.test"
   echo "  https://traefik.test/dashboard/"
-  echo "  https://kibana.test"
+  echo "  https://grafana.test"
   echo "  https://gitea.test"
   echo "  https://argocd.test"
   echo ""
   echo "Start port-forwards in dedicated terminals if needed:"
-  echo "  pf-vault   — Vault UI (http://<SERVER_IP>:8200)"
-  echo "  pf-es      — Elasticsearch API (https://<SERVER_IP>:9200)"
+  echo "  pf-vault         — Vault UI       (http://<SERVER_IP>:8200)"
+  echo "  pf-prom          — Prometheus UI  (http://<SERVER_IP>:9090)"
+  echo "  pf-alertmanager  — Alertmanager   (http://<SERVER_IP>:9093)"
 }
 
 poc-stop() {
   # Clean up background port-forward containers and runner
-  docker stop pf-vault-bg 2>/dev/null && echo "Vault port-forward stopped" || true
-  docker stop pf-es       2>/dev/null && echo "ES port-forward stopped"   || true
-  docker stop pf-kibana   2>/dev/null && echo "Kibana port-forward stopped" || true
-  docker stop pf-gitea    2>/dev/null && echo "Gitea port-forward stopped" || true
-  docker stop pf-argocd   2>/dev/null && echo "ArgoCD port-forward stopped" || true
+  docker stop pf-vault-bg       2>/dev/null && echo "Vault port-forward stopped"        || true
+  docker stop pf-prom           2>/dev/null && echo "Prometheus port-forward stopped"   || true
+  docker stop pf-alertmanager   2>/dev/null && echo "Alertmanager port-forward stopped" || true
+  docker stop pf-gitea          2>/dev/null && echo "Gitea port-forward stopped"        || true
+  docker stop pf-argocd         2>/dev/null && echo "ArgoCD port-forward stopped"       || true
   runner-stop
 }
 

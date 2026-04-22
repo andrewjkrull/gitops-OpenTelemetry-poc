@@ -1,0 +1,70 @@
+# Loki values — single-binary, filesystem
+# Upstream: https://github.com/grafana/loki/tree/main/production/helm/loki
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    allow_structured_metadata: true
+    volume_enabled: true
+    # 2h retention for PoC disk discipline. Logs are the highest-volume
+    # store (body + structured metadata per line) and bind-mounted onto the
+    # host's /var partition via k3d's local-path provisioner, so "PVC
+    # size" is a reservation, not a limit — unbounded growth can fill the
+    # host disk. 2h matches the old ECK poc-2h-delete ILM policy.
+    retention_period: 2h
+  # Retention is ENFORCED by the compactor. Without retention_enabled=true,
+  # the retention_period above is documentation only and Loki will keep
+  # data forever. Compaction runs every 10m by default.
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  ruler:
+    enable_api: false
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1,    memory: 1Gi  }
+  persistence:
+    enabled: true
+    size: 5Gi
+
+# Disable scalable-topology components
+read:    { replicas: 0 }
+write:   { replicas: 0 }
+backend: { replicas: 0 }
+
+# Don't need these for PoC
+chunksCache:  { enabled: false }
+resultsCache: { enabled: false }
+gateway:      { enabled: false }
+
+test:        { enabled: false }
+lokiCanary:  { enabled: false }
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kps }
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false

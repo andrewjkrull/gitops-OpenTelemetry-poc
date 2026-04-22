@@ -1,0 +1,66 @@
+# Tempo values — monolithic, filesystem
+# Upstream: https://github.com/grafana/helm-charts/tree/main/charts/tempo
+
+persistence:
+  enabled: true
+  size: 5Gi
+resources:
+  limits:
+    cpu: 1
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kps
+tempo:
+  # Metrics-generator: derives Prometheus metrics from spans as they flow
+  # through Tempo. Enables the Panel 1 (p95 latency) and Panel 4 (error rate)
+  # queries that read traces_spanmetrics_* metrics from Prometheus.
+  metricsGenerator:
+    enabled: true
+    # NOTE: The Prometheus URL here references the service name from Step 7.
+    # If your kps Prometheus service is named differently, update this line.
+    remoteWriteUrl: http://kps-prometheus.observability.svc.cluster.local:9090/api/v1/write
+
+  # Processors MUST be enabled via per-tenant overrides — the global
+  # `metricsGenerator.enabled: true` flag installs and configures the
+  # component, but without processors listed here it runs idle and
+  # produces no metrics. This is a silent failure mode: no errors in
+  # Tempo logs, `helm get values` shows correct-looking config, but
+  # traces_spanmetrics_* metrics never appear in Prometheus and Panels
+  # 1 and 4 stay empty.
+  #
+  # - service-graphs: service-to-service call metrics (feeds Grafana's
+  #   Service Map view on the Tempo datasource).
+  # - span-metrics: latency histograms and call-count counters
+  #   (feeds traces_spanmetrics_latency_bucket and
+  #   traces_spanmetrics_calls_total in Prometheus).
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+          - span-metrics
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  # 2h retention for PoC disk discipline. Tempo's block_retention is set by
+  # this value; the compactor runs continuously and deletes blocks older
+  # than this threshold. Matches Loki at 2h — logs and traces correlate by
+  # trace_id and should be queryable over the same window.
+  retention: 2h
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
