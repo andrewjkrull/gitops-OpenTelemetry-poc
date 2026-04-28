@@ -147,6 +147,17 @@ alias pf-alertmanager="docker run --rm -it --network host \
   ${TOOLKIT_IMAGE} \
   kubectl port-forward svc/kps-alertmanager -n observability 9093:9093"
 
+# Loki HTTP API — direct access. Normal path is Grafana Explore at https://grafana.test.
+# This alias is for hitting /loki/api/v1/query_range with curl to capture raw log
+# records as JSON (evidence gathering, scripted queries, diffing before/after).
+# Access: http://<SERVER_IP>:3100  (or http://127.0.0.1:3100 on the host itself)
+alias pf-loki="docker run --rm -it --network host \
+  -v ${POC_DIR}/kube:/root/.kube \
+  -e KUBECONFIG=/root/.kube/config \
+  --name pf-loki \
+  ${TOOLKIT_IMAGE} \
+  kubectl port-forward svc/loki -n observability 3100:3100"
+
 # NOTE: pf-traefik removed — Traefik service does not expose port 9000.
 # The Traefik API is on container port 8080 but not exposed via the Service.
 # For Traefik API access use:
@@ -564,6 +575,7 @@ poc-start() {
   echo "  pf-vault         — Vault UI       (http://<SERVER_IP>:8200)"
   echo "  pf-prom          — Prometheus UI  (http://<SERVER_IP>:9090)"
   echo "  pf-alertmanager  — Alertmanager   (http://<SERVER_IP>:9093)"
+  echo "  pf-loki          — Loki API       (http://<SERVER_IP>:3100)"
 }
 
 poc-stop() {
@@ -571,6 +583,7 @@ poc-stop() {
   docker stop pf-vault-bg       2>/dev/null && echo "Vault port-forward stopped"        || true
   docker stop pf-prom           2>/dev/null && echo "Prometheus port-forward stopped"   || true
   docker stop pf-alertmanager   2>/dev/null && echo "Alertmanager port-forward stopped" || true
+  docker stop pf-loki           2>/dev/null && echo "Loki port-forward stopped"         || true
   docker stop pf-gitea          2>/dev/null && echo "Gitea port-forward stopped"        || true
   docker stop pf-argocd         2>/dev/null && echo "ArgoCD port-forward stopped"       || true
   runner-stop
