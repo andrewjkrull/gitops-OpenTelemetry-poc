@@ -449,6 +449,7 @@ runner:
   labels:
     - "ubuntu-latest:docker://gitea/runner-images:ubuntu-latest"
     - "ubuntu-22.04:docker://gitea/runner-images:ubuntu-latest"
+    - "poc-runner:docker://gitea/runner-images:ubuntu-latest"
 container:
   network: "host"
   options: >-
@@ -476,7 +477,7 @@ RUNNER_CONFIG
     -e GITEA_INSTANCE_URL=https://gitea.test \
     -e GITEA_RUNNER_REGISTRATION_TOKEN="${RUNNER_TOKEN}" \
     -e GITEA_RUNNER_NAME=poc-runner \
-    -e GITEA_RUNNER_LABELS="ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,ubuntu-22.04:docker://gitea/runner-images:ubuntu-latest" \
+    -e GITEA_RUNNER_LABELS="ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,ubuntu-22.04:docker://gitea/runner-images:ubuntu-latest,poc-runner:docker://gitea/runner-images:ubuntu-latest" \
     -e SSL_CERT_DIR=/usr/local/share/ca-certificates \
     -e CONFIG_FILE=/data/config.yml \
     gitea/act_runner:latest
