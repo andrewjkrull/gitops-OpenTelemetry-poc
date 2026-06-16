@@ -1,0 +1,52 @@
+# Fluent Bit Collector values — k3d overrides + OTLP output to gateway.
+# Chart: fluent/fluent-bit-collector
+#
+# fluent-bit's role in this PoC is pure log forwarding: tail container logs,
+# attach kubernetes metadata via the chart's default kubernetes processor,
+# ship to the OTel gateway via OTLP. All log normalization, OTLP semantic-
+# convention shaping, label cardinality enforcement, and service.name
+# derivation happens at the gateway (see CONTEXT.md "Architectural anchors:
+# Gateway as policy enforcement point"). fluent-bit emits raw, gateway
+# normalizes.
+
+# Override hostVolumes to drop /etc/machine-id. The chart's default mounts
+# both /etc/machine-id and /var/log; k3d node containers don't ship with
+# /etc/machine-id, which causes the hostPath File-type check to fail and
+# pods to stay unscheduled. We don't use machine-id — the gateway's
+# k8sattributes processor will attach host.name / k8s.node.name.
+hostVolumes:
+  - name: logs
+    hostPath:
+      path: /var/log
+      type: Directory
+    mountPath: /var/log
+
+# Tolerate the control-plane taint so we collect logs from k3d's server node
+# in addition to agent nodes.
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+
+# Annotate fluent-bit's own pods so the kubernetes filter excludes their
+# logs from collection. Without this, fluent-bit tails its own container
+# log, parses the record, dumps the parsed form to stdout, then re-reads
+# that, re-parses, re-dumps — record size grows exponentially per cycle
+# and the gateway gets pummeled with nested JSON. The chart enables
+# k8s-logging.exclude on the kubernetes filter by default, so the filter
+# honors this annotation and skips matching pods entirely.
+podAnnotations:
+  fluentbit.io/exclude: "true"
+
+# Replace the chart's default `stdout` output with OTLP/HTTP forwarding to
+# the gateway. The gateway is the policy enforcement point for log
+# normalization, label cardinality, and routing to Loki.
+config:
+  pipeline:
+    outputs:
+      - name: opentelemetry
+        alias: gateway
+        match: "*"
+        host: otel-collector-gateway.observability.svc.cluster.local
+        port: 4318
+        logs_uri: /v1/logs
+        tls: off

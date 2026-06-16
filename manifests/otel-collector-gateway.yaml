@@ -14,6 +14,15 @@ spec:
     metadata:
       labels:
         app: otel-collector-gateway
+      annotations:
+        # Exclude this pod from fluent-bit log collection. Without this,
+        # enabling debug-exporter verbosity: detailed creates a feedback
+        # loop — fluent-bit tails gateway stdout, ships records back to
+        # the gateway, gateway dumps them again with one more layer of
+        # nesting per cycle. The gateway sits upstream of fluent-bit in
+        # the data flow; downstream components must never become input
+        # sources for upstream ones.
+        fluentbit.io/exclude: "true"
     spec:
       serviceAccountName: otel-collector-gateway
       containers:
@@ -34,11 +43,11 @@ spec:
               protocol: TCP
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
+              cpu: 200m
               memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
           volumeMounts:
             - mountPath: /conf
               name: config

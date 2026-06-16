@@ -1,0 +1,131 @@
+# OpenTelemetry Collector DaemonSet values — k3d log collection substrate.
+# Chart: open-telemetry/opentelemetry-collector
+#
+# This DaemonSet replaces fluent-bit-collector as the cluster's log
+# collection substrate. Per CONTEXT.md "Architectural anchors: Gateway
+# as policy enforcement point", the DaemonSet's job is narrow: tail
+# container logs, attach k8s metadata via the k8sattributes processor,
+# ship to the gateway via OTLP. The gateway handles normalization,
+# label cardinality, and routing to Loki.
+#
+# Yesterday's substrate investigation (2026-05-08) ruled out fluent-bit's
+# out_opentelemetry plugin for this PoC's goals — it cannot ship k8s
+# metadata as OTLP resource attributes. The OTel chart's
+# presets.kubernetesAttributes preset solves this directly by enriching
+# records via the K8s API.
+
+mode: daemonset
+
+# Contrib image required for filelog receiver and k8sattributes processor.
+# The core image does not include these components.
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+# Tolerate the control-plane taint so we collect logs from k3d's server
+# node in addition to agent nodes. Matches fluent-bit-collector's pattern.
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+
+# Resource requests/limits. The chart warns when these are absent because
+# (a) the collector falls back to Go's default memory management without
+# GOMEMLIMIT, and (b) unbounded DaemonSets can starve the node.
+#
+# Sizing rationale: the DaemonSet's work is narrow (tail container logs,
+# enrich via k8sattributes, ship via OTLP). Modest at this PoC's log
+# volume. Limits leave 4x headroom over requests. Setting
+# resources.limits.memory also unlocks the chart's useGOMEMLIMIT
+# behavior, which configures the Go runtime to GC against this ceiling.
+#
+# Three pods × 512Mi memory ceiling = 1.5G cluster-wide max — well
+# within the k3d budget. Revisit if the .NET stdout pivot lands and
+# stdout volume jumps significantly.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+presets:
+  # Wires up the filelog receiver with the container parser operator
+  # (handles CRI multiline correctly with minimal config — the 2024
+  # parser addition).
+  logsCollection:
+    enabled: true
+    # Prevent feedback loop on the DaemonSet's own pod logs. NOTE: this
+    # preset adds an auto-exclude entry to the filelog receiver's
+    # exclude list, but the chart's list handling is replace-not-merge
+    # for receivers.filelog.exclude — see config.receivers.filelog
+    # below for the inline reproduction.
+    includeCollectorLogs: false
+
+  # Wires up the k8sattributes processor with sane defaults. The
+  # processor talks to the K8s API directly to enrich records with
+  # k8s.namespace.name, k8s.pod.name, k8s.container.name, etc. This is
+  # the capability fluent-bit's OTLP output could not provide and is
+  # the load-bearing reason for this substrate change.
+  kubernetesAttributes:
+    enabled: true
+
+config:
+  # Override the chart's default `debug` exporter with OTLP forwarding
+  # to the gateway. The gateway is the policy enforcement point for log
+  # normalization, label cardinality, and routing to Loki.
+  #
+  # tls.insecure: true is correct here — verified against the gateway's
+  # Service definition (ports otlp-grpc/4317 and otlp-http/4318, no TLS
+  # termination). Plaintext OTLP is the established pattern in this
+  # cluster. Production posture is a separate conversation.
+  exporters:
+    otlp/gateway:
+      endpoint: otel-collector-gateway.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+
+  # Swap the chart-default `debug` exporter for `otlp/gateway` across
+  # all three pipelines. All telemetry from the DaemonSet flows through
+  # the gateway — no exceptions to the policy enforcement point.
+  #
+  # Logs is today's primary work. Metrics and traces pipelines stay in
+  # the substrate by default; the chart-rendered receivers (OTLP,
+  # Jaeger, Zipkin, Prometheus self-scrape) are preserved. Apps still
+  # ship traces direct to the gateway today, but having the DaemonSet
+  # ready to receive on standard ports keeps the substrate complete
+  # for Project Citadel adoption.
+  service:
+    pipelines:
+      logs:
+        exporters:
+          - otlp/gateway
+      metrics:
+        exporters:
+          - otlp/gateway
+      traces:
+        exporters:
+          - otlp/gateway
+
+  # Filelog exclude list — both entries required, reproduced inline.
+  #
+  # Validated 2026-05-11 via `helm template`: the chart's list handling
+  # for receivers.filelog.exclude is replace-not-merge. Setting this
+  # list at the values level discards anything the presets would have
+  # contributed (specifically the DaemonSet self-exclude from
+  # includeCollectorLogs: false). Both entries must be reproduced here.
+  #
+  # First entry: the DaemonSet's own pods. Without this, the collector
+  # tails its own container log, parses, dumps the parsed form to
+  # stdout, then re-reads it — exponential growth per cycle.
+  #
+  # Second entry: the gateway pod. The original feedback-loop scenario
+  # (collector tails gateway stdout, gateway re-emits with one more
+  # layer of nesting per cycle) applies equally to any DaemonSet log
+  # collector watching container logs. The fluentbit.io/exclude
+  # annotation already on the gateway pod is fluent-bit-specific and
+  # the OTel filelog receiver does not honor it — we exclude by path.
+  receivers:
+    filelog:
+      exclude:
+        - /var/log/pods/observability_otel-collector-daemonset-opentelemetry-collector-agent-*_*/opentelemetry-collector/*.log
+        - /var/log/pods/observability_otel-collector-gateway-*_*/otel-collector/*.log

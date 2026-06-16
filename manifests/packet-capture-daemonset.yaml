@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: poc-packet-capture
+  namespace: messaging
+spec:
+  selector:
+    matchLabels:
+      name: poc-packet-capture
+  template:
+    metadata:
+      labels:
+        name: poc-packet-capture
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: netshoot
+        image: nicolaka/netshoot:latest
+        securityContext:
+          privileged: true
+        command: ["sleep", "infinity"]
+        volumeMounts:
+        - name: captures
+          mountPath: /captures
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      volumes:
+      - name: captures
+        emptyDir:
+          sizeLimit: 1Gi
